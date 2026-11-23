@@ -445,3 +445,36 @@ class TestBuildRecursion:
             assert "--dry-run" in text or "build_release.py" not in text, (
                 f"{path.name} invokes the builder without --dry-run"
             )
+
+
+class TestSpecRootResolution:
+    """A spec must find the repo root, not count parents.
+
+    The macOS spec used ``SPECPATH.parent.parent.parent``, one level too many, so
+    the build failed on the machine with ``script '.../launcher.py' not found``
+    after a two-minute freeze — a mistake no local test could see because the
+    path only has to be wrong once.
+    """
+
+    SPECS = [ROOT / "installers/USBDoctorAI.spec", ROOT / "installers/macos/USBDoctorAI.spec"]
+
+    @pytest.mark.parametrize("spec", SPECS, ids=["windows", "macos"])
+    def test_root_is_found_by_searching_for_the_entry_point(self, spec):
+        source = spec.read_text(encoding="utf-8")
+        assert 'while not (ROOT / "launcher.py").exists()' in source, (
+            f"{spec} counts parents instead of finding the repository root"
+        )
+
+    @pytest.mark.parametrize("spec", SPECS, ids=["windows", "macos"])
+    def test_the_resolution_lands_on_the_repository_root(self, spec):
+        """Simulate PyInstaller: SPECPATH is the spec's own directory."""
+        specpath = spec.parent
+        root = specpath.resolve()
+        while not (root / "launcher.py").exists() and root.parent != root:
+            root = root.parent
+        assert root == ROOT, f"{spec} resolves to {root}, expected {ROOT}"
+
+    @pytest.mark.parametrize("spec", SPECS, ids=["windows", "macos"])
+    def test_launcher_is_the_declared_entry_point(self, spec):
+        assert (ROOT / "launcher.py").exists()
+        assert 'ROOT / "launcher.py"' in spec.read_text(encoding="utf-8")

@@ -15,7 +15,13 @@ runner and ships two DMGs rather than pretending one binary covers both.
 
 from pathlib import Path
 
-ROOT = Path(SPECPATH).resolve().parent.parent.parent   # noqa: F821 - provided by PyInstaller
+# SPECPATH is provided by PyInstaller and points at this spec's directory. Do not
+# count parents: that is off by one the moment the spec moves, and the failure is
+# "script '.../launcher.py' not found" on a build machine. Walk up until the entry
+# point is actually there.
+ROOT = Path(SPECPATH).resolve()   # noqa: F821 - provided by PyInstaller
+while not (ROOT / "launcher.py").exists() and ROOT.parent != ROOT:
+    ROOT = ROOT.parent
 ASSETS = ROOT / "usbdoctor" / "frontend" / "web"
 
 icon = str(ASSETS / "assets" / "app.icns")
