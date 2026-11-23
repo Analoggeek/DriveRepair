@@ -77,11 +77,18 @@ class DeviceRef:
     # ------------------------------------------------------------------ utils
     @property
     def display_name(self) -> str:
-        brand = (self.vendor or "").strip() or (self.model or "").strip() or "Unknown device"
+        """Human label without duplicating a brand that already prefixes the model."""
+        vendor = (self.vendor or "").strip()
         model = (self.model or "").strip()
-        if model and brand.lower() not in model.lower():
-            return f"{brand} {model}".strip()
-        return brand
+        if not vendor and not model:
+            return "Unknown device"
+        if not vendor:
+            return model
+        if not model:
+            return vendor
+        if model.lower().startswith(vendor.lower()):
+            return model
+        return f"{vendor} {model}"
 
     @property
     def is_usb(self) -> bool:

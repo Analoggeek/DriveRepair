@@ -145,7 +145,7 @@ def probe_boot_signatures(
     candidates: list[BootCandidate] = []
     checked: set[int] = set()
 
-    def probe(offset: int, kind: str) -> None:
+    def probe(offset: int, kind: str, *, allow_partial: bool = False) -> None:
         if offset in checked:
             return
         checked.add(offset)
@@ -156,6 +156,14 @@ def probe_boot_signatures(
         if len(data) < 512:
             return
         found = sniff(data)
+        if allow_partial and found.filesystem == "fat?":
+            # A backup copy can have its type string truncated/stale while its
+            # BPB geometry (and therefore the recoverability) is intact.
+            candidates.append(
+                BootCandidate(offset=offset, filesystem="fat", confidence="likely",
+                              evidence=[f"{kind}: " + "; ".join(found.evidence)])
+            )
+            return
         if found.filesystem in ("unknown", "fat?", "apm"):
             return
         candidates.append(
@@ -167,7 +175,11 @@ def probe_boot_signatures(
             )
         )
 
-    probe(_FAT32_BACKUP_SECTOR * sector_size, f"backup boot sector (sector {_FAT32_BACKUP_SECTOR})")
+    probe(
+        _FAT32_BACKUP_SECTOR * sector_size,
+        f"backup boot sector (sector {_FAT32_BACKUP_SECTOR})",
+        allow_partial=True,
+    )
     probe(_EXFAT_BACKUP_SECTOR * sector_size, f"backup boot region (sector {_EXFAT_BACKUP_SECTOR})")
     for offset in _PROBE_OFFSETS:
         probe(offset, f"volume start at offset {offset:,}")
@@ -280,7 +292,7 @@ def _candidate_restore(
                     reason_code="FAT32_RESTORE_PRIMARY_BOOT",
                 ).to_dict()
             )
-            detail["detected_filesystem"] = cand.filesystem
+            detail["detected_filesystem"] = sniff(backup).filesystem or cand.filesystem
             issues.append(
                 TableIssue(
                     "critical",
@@ -292,7 +304,7 @@ def _candidate_restore(
                 )
             )
             return issues
-        if cand.offset == _EXFAT_BACKUP_SECTOR * sector and cand.filesystem == "exfat":
+        if cand.offset == _EXFAT_BACKUP_SECTOR * sector and cand.filesystem.startswith("exfat"):
             backup_region = reader.read(base_offset + cand.offset, 12 * sector)
             if len(backup_region) < 12 * sector:
                 continue

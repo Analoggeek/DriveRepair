@@ -158,16 +158,36 @@ class GuardedWriter:
 
     # ------------------------------------------------------------------ write
     def write(self, offset: int, data: bytes, *, note: str = "") -> int:
+        """Write ``data`` at ``offset``.
+
+        Raw block devices only accept whole-sector writes, but a repair often
+        needs to change a handful of bytes (e.g. the 2-byte 0x55AA signature).
+        Those cases are performed as a *read-modify-write* of the enclosing
+        sectors, which is what every professional disk tool does.  The caller
+        still gets an exact byte-for-byte behaviour.
+        """
         if not data:
             return 0
         if not self._verified:
             raise DeviceIdentityChangedError("Write attempted before identity verification.")
         sector = max(1, self.device.sector_size)
         if offset % sector or len(data) % sector:
-            raise UsbDoctorError(
-                f"Raw writes must be sector-aligned ({sector} bytes). "
-                f"offset={offset} length={len(data)}"
+            start, length = aligned(offset, len(data), sector)
+            pad_left = offset - start
+            pad_right = (start + length) - (offset + len(data))
+            original = self.readback(start, length)
+            if len(original) != length:
+                raise UsbDoctorError(
+                    f"Could not read the {length}-byte sector window at {start:,} needed to patch "
+                    f"byte {offset:,} safely."
+                )
+            composed = original[:pad_left] + data + original[length - pad_right :] if pad_right else (
+                original[:pad_left] + data
             )
+            if len(composed) != length:  # defensive: never send a mis-sized buffer
+                raise UsbDoctorError("internal error: read-modify-write buffer mis-sized")
+            written = self.write(start, composed, note=(note or "patch") + " [read-modify-write]")
+            return min(written, len(data))
         if self.dry_run:
             self._bytes_written += len(data)
             if self.audit:

@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# App-generated state (never committed)
+*.log
+audit.jsonl
+rollback/
+recovery_out/
+images_out/
+*.img
+*.raw
+*.dd
+
+# PyInstaller / Qt build artefacts
+*.spec.bak
+build_win/
+build_mac/
+*.app/
+*.dmg
+*.exe
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini

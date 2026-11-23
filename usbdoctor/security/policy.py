@@ -45,6 +45,12 @@ class SafetyPolicy:
     # ----------------------------------------------------------------- checks
     def check_writable(self, device: DeviceRef, operation: str) -> None:
         """Raise :class:`UnsafeOperationError` unless writing is permitted."""
+        if device.path in self.settings.protected_paths:
+            raise UnsafeOperationError(
+                f"Device {device.path} is on the protected list.",
+                hint="Remove it in Settings → Safety if this is really intended.",
+            )
+
         if device.kind == "image":
             # Images are plain files; still forbid writing into the OS tree.
             real = os.path.realpath(device.path)
@@ -53,12 +59,6 @@ class SafetyPolicy:
                     f"Refusing to modify image inside system directories: {device.path}"
                 )
             return
-
-        if device.path in self.settings.protected_paths:
-            raise UnsafeOperationError(
-                f"Device {device.path} is on the protected list.",
-                hint="Remove it in Settings → Safety if this is really intended.",
-            )
 
         if self.is_system_disk(device):
             raise UnsafeOperationError(
