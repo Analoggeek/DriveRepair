@@ -51,6 +51,14 @@ usbdoctor = [
     "knowledge/*.json",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Report every skip with its reason: a GUI test that silently skips on a machine
+# without Qt looks identical to a passing test, and that is exactly how a broken
+# desktop build slips through.
+addopts = "-ra"
+python_files = ["test_*.py"]
+
 [tool.ruff]
 line-length = 110
 target-version = "py39"

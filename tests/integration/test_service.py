@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.support import wait_for_status
+
 from tests.fixtures import images as F
 
 from usbdoctor.ai import DiagnosticAssistant, render_text
@@ -323,13 +325,9 @@ class TestServiceScan:
     def test_async_scan_emits_real_progress_and_finishes(self, service, fat_image):
         path, _ = fat_image
         job_id = service.scan_async(str(path), ScanOptions(surface_time_budget_s=5))
-        import time
-
-        for _ in range(200):
-            if service.job(job_id)["status"] != "running":
-                break
-            time.sleep(0.02)
-        job = service.job(job_id)
+        # Deadline, not a tick count: a scan may legitimately take longer on a
+        # loaded CI runner than on a developer machine.
+        job = wait_for_status(lambda: service.job(job_id))
         assert job["status"] == "completed", job["error"]
         assert job["result"]["health"]["verdict"]
         assert job["progress"] == 100.0

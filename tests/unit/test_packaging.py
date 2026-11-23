@@ -132,3 +132,92 @@ class TestBuildScripts:
         assert any("windows" in str(spec.get("runs-on", "")) for spec in jobs.values())
         macos = jobs["macos"]
         assert "matrix" in macos["strategy"], "macOS must build both architectures"
+
+
+class TestTestSuitePortability:
+    """Guards against tests that only pass on the machine they were written on.
+
+    Two bugs already reached CI this way: a subprocess test that ran ``echo`` and
+    ``sleep`` (neither is a program on Windows) and async tests that waited a
+    fixed number of 20 ms ticks (a hidden ~6 s performance budget that a loaded
+    CI runner can miss).
+    """
+
+    TEST_FILES = sorted((ROOT / "tests").rglob("test_*.py"))
+
+    def test_no_shell_utilities_are_executed(self):
+        offenders = []
+        for path in self.TEST_FILES:
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if "run_process([" not in line:
+                    continue
+                for tool in ("echo", "sleep", "cat", "ls", "rm", "true"):
+                    if f'"{tool}"' in line:
+                        offenders.append(f"{path.name}:{number} runs POSIX tool {tool!r}")
+        assert not offenders, (
+            "use sys.executable instead of shell utilities (they do not exist on Windows):\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_no_fixed_iteration_waits(self):
+        """Waiting must be deadline-based, via tests.support.wait_for."""
+        import re
+
+        offenders = []
+        for path in self.TEST_FILES:
+            text = path.read_text(encoding="utf-8")
+            for match in re.finditer(r"for _ in range\((\d+)\)", text):
+                window = text[match.start() : match.start() + 400]
+                if "sleep" in window:
+                    line = text[: match.start()].count("\n") + 1
+                    offenders.append(f"{path.name}:{line}")
+        assert not offenders, (
+            "fixed-iteration sleeps encode a machine-speed assumption; "
+            "use tests.support.wait_for instead: " + ", ".join(offenders)
+        )
+
+    def test_support_helper_exists_and_is_used(self):
+        assert (ROOT / "tests/support.py").exists()
+        users = [p.name for p in self.TEST_FILES if "tests.support import" in p.read_text(encoding="utf-8")]
+        assert users, "no test uses the shared deadline-based wait helper"
+
+
+class TestReleaseBuilderOutput:
+    """The builder is driven by CI, so its output is a contract."""
+
+    def _run(self, *args):
+        import subprocess
+        import sys
+
+        return subprocess.run(
+            [sys.executable, str(ROOT / "tools/build_release.py"), *args],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+        )
+
+    def test_json_mode_emits_only_json_on_stdout(self):
+        """`--json > report.json` must produce a parseable file, failure included."""
+        import json
+        import platform
+
+        result = self._run("--json")
+        assert result.stdout.strip(), "nothing on stdout in --json mode"
+        document = json.loads(result.stdout)  # raises if progress logs leaked in
+        assert document["host"] == platform.system()
+        assert document["status"] in ("ok", "failed")
+
+    def test_unsupported_host_fails_with_a_clear_reason(self):
+        import json
+        import platform
+
+        if platform.system() in ("Windows", "Darwin"):
+            pytest.skip("this host can actually build")
+        result = self._run("--json")
+        assert result.returncode == 1
+        assert "cross-compile" in json.loads(result.stdout)["error"]
+        assert "release.yml" in result.stderr
+
+    def test_progress_goes_to_stderr_in_json_mode(self):
+        result = self._run("--json")
+        assert "==>" not in result.stdout

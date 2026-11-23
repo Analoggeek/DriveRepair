@@ -36,7 +36,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install pytest PySide6-Essentials
+          python -m pip install -e ".[dev,desktop]"
       - name: Unit + integration tests
         env:
           QT_QPA_PLATFORM: offscreen
@@ -56,7 +56,7 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "PySide6-Essentials>=6.5" "pyinstaller>=6.0" "Pillow>=10.0" pytest
+          python -m pip install -e ".[desktop,package,dev]"
 
       - name: Install Inno Setup 6
         run: |
@@ -64,7 +64,10 @@ jobs:
           echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
 
       - name: Build, verify and package
-        run: python tools/build_release.py --json | Tee-Object -FilePath build-report.json
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/build_release.py --json | tee build-report.json
 
       - name: Upload the offline installer
         uses: actions/upload-artifact@v4
@@ -96,7 +99,7 @@ jobs:
             arch: arm64
             label: AppleSilicon
           - runner: macos-13
-            arch: x86_64
+            arch: x64
             label: Intel
     runs-on: ${{ matrix.runner }}
     steps:
@@ -104,15 +107,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          architecture: ${{ matrix.arch == 'arm64' && 'arm64' || 'x64' }}
 
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "PySide6-Essentials>=6.5" "pyinstaller>=6.0" "Pillow>=10.0" pytest
+          python -m pip install -e ".[desktop,package,dev]"
 
       - name: Build, verify and package
-        run: python tools/build_release.py --json | tee build-report.json
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/build_release.py --json | tee build-report.json
 
       - name: Report the bundle architecture
         run: |
@@ -134,6 +139,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/USBDoctorAI-*.dmg
-            dist/USBDoctorAI-*-portable.zip
+            dist/USBDoctorAI-*-${{ matrix.arch }}.dmg
+            dist/USBDoctorAI-*-${{ matrix.arch }}-portable.zip
           fail_on_unmatched_files: true

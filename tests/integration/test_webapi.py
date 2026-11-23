@@ -16,6 +16,8 @@ from typing import Any, Optional
 
 import pytest
 
+from tests.support import wait_for, wait_for_status
+
 from tests.fixtures import images as F
 
 from usbdoctor.service import DoctorService
@@ -200,13 +202,9 @@ class TestScanFlow:
                                                          "surface_time_budget_s": 3})
         assert start.status == 202
         job_id = start.json["job_id"]
-        for _ in range(300):
-            job = client.request("GET", f"/api/jobs/detail?id={job_id}")
-            if job.json["status"] != "running":
-                break
-            time.sleep(0.02)
-        assert job.json["status"] == "completed", job.json.get("error")
-        result = job.json["result"]
+        job = wait_for_status(lambda: client.request("GET", f"/api/jobs/detail?id={job_id}").json)
+        assert job["status"] == "completed", job.get("error")
+        result = job["result"]
         assert "FAT_BOOT_SECTOR_DESTROYED" in result["evidence_codes"]
         assert result["plans"][0]["operation_id"] == "fat-boot"
 
@@ -215,10 +213,7 @@ class TestScanFlow:
 
         job_id = client.request("POST", "/api/scan", body={"device_path": str(damaged_image), "mode": "smart",
                                                           "surface_time_budget_s": 2}).json["job_id"]
-        for _ in range(300):
-            if client.request("GET", f"/api/jobs/detail?id={job_id}").json["status"] != "running":
-                break
-            time.sleep(0.02)
+        wait_for_status(lambda: client.request("GET", f"/api/jobs/detail?id={job_id}").json)
         last = client.request("GET", f"/api/scan/last?path={urllib.parse.quote(str(damaged_image))}")
         assert last.status == 200
         report = client.request("GET", f"/api/report?path={urllib.parse.quote(str(damaged_image))}&format=markdown")
@@ -312,15 +307,14 @@ class TestRealServer:
         )
         thread.start()
         base = f"http://127.0.0.1:{port}"
-        for _ in range(120):
+        def started():
             try:
-                with urllib.request.urlopen(f"{base}/api/status", timeout=1) as response:
-                    status = json.loads(response.read())
-                break
-            except (urllib.error.URLError, ConnectionError):
-                time.sleep(0.05)
-        else:
-            pytest.fail("the server did not start")
+                with urllib.request.urlopen(f"{base}/api/status", timeout=5) as response:
+                    return json.loads(response.read())
+            except (urllib.error.URLError, ConnectionError, OSError):
+                return None
+
+        status = wait_for(started, timeout=60, interval=0.05, message="the server did not start")
 
         assert status["app"] == "USB Doctor AI"
         # Unauthenticated mutation must be refused over real HTTP too.

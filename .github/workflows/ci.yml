@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -11,6 +11,7 @@ permissions:
 
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
 
 jobs:
   tests:
@@ -23,21 +24,47 @@ jobs:
         python: ["3.9", "3.11"]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+
+      # Install the project itself, not just pytest. Without this the suite runs
+      # against whatever source tree happens to be on sys.path because of the
+      # working directory, which hides packaging mistakes (a missing data file,
+      # a module that is never included in the distribution).
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          python -m pip install -e ".[dev]"
+
+      - name: Environment
+        run: |
+          python -c "import platform,sys;print('python', sys.version);print('platform', platform.platform())"
+          python -c "import usbdoctor, pathlib;print('usbdoctor from', pathlib.Path(usbdoctor.__file__).parent)"
+          python -m pytest --version
+
       - name: Engine, CLI and web API (no GUI dependency)
-        run: python -m pytest tests -q
+        run: python -m pytest tests -q --tb=short -ra --junitxml=junit-${{ matrix.os }}-${{ matrix.python }}.xml
+
       - name: Install the desktop dependency
-        run: pip install "PySide6-Essentials>=6.5"
+        run: python -m pip install "PySide6-Essentials>=6.5"
+
       - name: Desktop UI tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest tests -q
+        run: python -m pytest tests -q --tb=short -ra
+
+      # A failing job's log is only useful if someone can open it. Keep the
+      # JUnit report so an intermittent failure can be attributed to a test
+      # instead of being guessed at.
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.os }}-py${{ matrix.python }}
+          path: junit-*.xml
+          if-no-files-found: ignore
 
   package:
     name: Packaged self-check (${{ matrix.os }})
@@ -49,16 +76,32 @@ jobs:
         os: [windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "PySide6-Essentials>=6.5" "pyinstaller>=6.0" "Pillow>=10.0" pytest
+          python -m pip install -e ".[desktop,package,dev]"
+
       # Runs the real spec, freezes the app and drives `selfcheck` inside the
       # frozen product. Catches the class of bug where the GUI works from source
       # but the packaged application is missing a lazily-imported module.
       - name: Freeze and self-check
-        run: python tools/build_release.py --skip-tests --portable-only --json
         shell: bash
+        run: |
+          set -o pipefail
+          python tools/build_release.py --skip-tests --portable-only --json
+
+      - name: Upload the frozen product on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-package-${{ matrix.os }}
+          path: |
+            dist/**
+            build/**/*.log
+          if-no-files-found: ignore
+          retention-days: 5

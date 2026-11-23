@@ -44,13 +44,23 @@ class BuildError(RuntimeError):
     """A release step failed; the artifact must not be published."""
 
 
+# When --json is requested, stdout must contain the JSON document and nothing
+# else, so progress goes to stderr. Otherwise a caller doing
+# `build_release.py --json > report.json` would get a file it cannot parse.
+_json_mode = False
+
+
+def _echo(message: str) -> None:
+    print(message, file=sys.stderr if _json_mode else sys.stdout)
+
+
 def log(message: str) -> None:
-    print(f"\n\033[1;36m==> {message}\033[0m" if sys.stdout.isatty() else f"\n==> {message}")
+    _echo(f"\n\033[1;36m==> {message}\033[0m" if sys.stdout.isatty() else f"\n==> {message}")
 
 
 def run(args: list[str], *, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
     printable = " ".join(args)
-    print(f"    $ {printable}")
+    _echo(f"    $ {printable}")
     result = subprocess.run(
         args, cwd=ROOT, text=True, capture_output=capture, check=False
     )
@@ -310,9 +320,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="print a machine-readable summary")
     args = parser.parse_args(argv)
 
+    global _json_mode
+    _json_mode = bool(args.json)
+
     started = time.time()
+    system = platform.system()
+    # A base report exists before any build step runs, so a failure can still be
+    # reported as valid JSON instead of a NameError on an unbound variable.
+    report: dict = {"status": "failed", "host": system, "artifacts": []}
     try:
-        system = platform.system()
         if system == "Windows":
             if args.portable_only:
                 log("Building the portable package only")
@@ -328,7 +344,20 @@ def main(argv: list[str] | None = None) -> int:
                 "workflow on GitHub Actions (.github/workflows/release.yml)."
             )
     except BuildError as exc:
-        print(f"\n\033[1;31mBUILD FAILED\033[0m\n{exc}", file=sys.stderr)
+        message = str(exc)
+        print(f"\n\033[1;31mBUILD FAILED\033[0m\n{message}", file=sys.stderr)
+        if _json_mode:
+            # Keep the machine-readable contract even on failure: a report file
+            # that is always valid JSON can be read by the caller without
+            # knowing whether the build worked.
+            report = {
+                "status": "failed",
+                "host": system,
+                "version": version(),
+                "error": message.splitlines()[0],
+                "artifacts": [],
+            }
+            print(json.dumps(report, indent=2))
         return 1
 
     report["version"] = version()
