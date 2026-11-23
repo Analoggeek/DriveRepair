@@ -513,9 +513,16 @@ class TestInstallerScript:
     def test_no_check_parameter_uses_an_equals_sign(self):
         import re
 
-        for match in re.finditer(r"Check:\s*([^;\n]+)", self.SCRIPT):
-            assert "=" not in match.group(1).replace("<>", "").replace(">=", "").replace("<=", ""), (
-                f"Inno's expression evaluator rejects '=': Check: {match.group(1).strip()}"
+        # Comments explain the rule and so contain the very thing it forbids.
+        directives = [
+            line for line in self.SCRIPT.splitlines()
+            if not line.lstrip().startswith(";") and "Check:" in line
+        ]
+        for line in directives:
+            expression = re.search(r"Check:\s*([^;]+)", line).group(1)
+            expression = expression.replace("<>", "").replace(">=", "").replace("<=", "")
+            assert "=" not in expression, (
+                f"Inno's expression evaluator rejects '=': Check: {expression.strip()}"
             )
 
     def test_the_selfcheck_entry_runs_only_for_a_watching_user(self):
