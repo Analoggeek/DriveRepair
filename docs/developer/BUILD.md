@@ -150,7 +150,7 @@ pyinstaller installers/USBDoctorAI.spec --noconfirm --clean
 
 ## Release checklist
 
-- [ ] `python -m pytest tests -q` is green (177 tests).
+- [ ] `python -m pytest tests -q` is green (209 tests).
 - [ ] `python tools/make_icons.py` regenerated after any logo change.
 - [ ] Version bumped in `usbdoctor/version.py` **and** in the installer scripts
       (`installers/windows/usbdoctor.iss`, both `.spec` bundles).

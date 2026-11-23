@@ -151,7 +151,7 @@ never diverge between frontends.
 ## Tests
 
 ```bash
-python -m pytest tests -q          # 177 tests
+python -m pytest tests -q          # 209 tests
 ```
 
 The suite builds real FAT32, exFAT, NTFS and ext images and performs genuine damage +
