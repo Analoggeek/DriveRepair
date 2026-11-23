@@ -1,0 +1,33 @@
+# PyInstaller Windows version resource.
+# Shown in Windows Explorer → Properties → Details and used by Add/Remove Programs.
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [
+          StringStruct('CompanyName', 'USB Doctor AI'),
+          StringStruct('FileDescription', 'USB Doctor AI — Storage Diagnosis, Repair & Recovery'),
+          StringStruct('FileVersion', '1.0.0.0'),
+          StringStruct('InternalName', 'USBDoctorAI'),
+          StringStruct('LegalCopyright', 'Copyright © 2026 USB Doctor AI'),
+          StringStruct('OriginalFilename', 'USBDoctorAI.exe'),
+          StringStruct('ProductName', 'USB Doctor AI'),
+          StringStruct('ProductVersion', '1.0.0.0'),
+          StringStruct('Comments', 'Diagnoses, repairs and recovers USB and internal storage.')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
