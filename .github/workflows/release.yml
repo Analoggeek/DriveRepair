@@ -90,13 +90,19 @@ jobs:
           printf 'stub\n' > dist/USBDoctorAI/USBDoctorAI.exe
           printf 'stub\n' > dist/USBDoctorAI/_internal/base_library.zip
           printf 'stub\n' > dist/USBDoctorAI/docs/readme.txt
-          ls -R dist/USBDoctorAI | head -20
           ISCC="C:/Program Files (x86)/Inno Setup 6/ISCC.exe"
-          "$ISCC" /? | head -3 || true
+          set +e
           "$ISCC" installers/windows/usbdoctor.iss > iss.log 2>&1
-          echo "ISCC exit: $?"
-          echo "=== log ($(wc -c < iss.log) bytes) ==="
-          cat -A iss.log | tail -45
+          code=$?
+          # Annotations are the only channel that survives this runner, and a step
+          # may publish few of them: pack the whole answer into two lines.
+          { echo "version:"; "$ISCC" /? 2>&1 | head -2; } | tr '\r\n' '  ' > iss-version.txt
+          { echo "exit $code, $(wc -l < iss.log) lines, $(wc -c < iss.log) bytes:"; \
+            grep -a -i -m6 'error\|abort\|warning' iss.log; echo '|| tail:'; tail -8 iss.log; } \
+            | tr '\r\n' '  ' > iss-summary.txt
+          cat iss.log
+          echo "::error::issc-version-$(cat iss-version.txt)"
+          echo "::error::issc-report-$(cat iss-summary.txt)"
           exit 1
 
       - name: Install build dependencies
@@ -116,7 +122,7 @@ jobs:
             --junitxml=junit-build.xml --durations=15 2>&1 | tee pytest-build.log
 
       - name: Report test failures
-        if: failure()
+        if: failure() && !inputs.iss_only
         shell: bash
         run: python .github/scripts/report_failures.py junit-build.xml pytest-build.log || true
 
@@ -226,7 +232,7 @@ jobs:
             --junitxml=junit-build.xml --durations=15 2>&1 | tee pytest-build.log
 
       - name: Report test failures
-        if: failure()
+        if: failure() && !inputs.iss_only
         shell: bash
         run: python .github/scripts/report_failures.py junit-build.xml pytest-build.log || true
 
