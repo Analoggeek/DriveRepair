@@ -179,8 +179,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # A stalled queue must become a red run, not a permanently pending one.
     timeout-minutes: 90
-    # A stalled queue must become a red run, not a permanently pending one.
-    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
