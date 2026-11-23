@@ -23,17 +23,18 @@ jobs:
         # Explicit runner labels rather than ubuntu-latest: the "latest" image is
         # now Ubuntu 26.04, which has no Python 3.9 build, so the oldest version
         # we claim to support needs an image that still ships it.
+        # The oldest supported Python is covered on Linux, which is where the
+        # 3.9 image still exists; the platform-specific jobs run the newest
+        # interpreter, which is what the installer build uses. Six jobs here
+        # meant Windows and macOS sat queued for over an hour on every push,
+        # which is slower than the coverage was worth.
         include:
           - os: ubuntu-22.04
             python: "3.9"
           - os: ubuntu-24.04
             python: "3.11"
           - os: windows-latest
-            python: "3.9"
-          - os: windows-latest
             python: "3.11"
-          - os: macos-latest
-            python: "3.9"
           - os: macos-latest
             python: "3.11"
     steps:
