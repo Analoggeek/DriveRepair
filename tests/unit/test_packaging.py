@@ -356,3 +356,29 @@ class TestRunnerLabels:
             assert workflow["jobs"][job_name].get("timeout-minutes"), (
                 f"{job_name} has no timeout; a queued job can hang indefinitely"
             )
+
+
+class TestBuildDeadlines:
+    """Every child process in the build must have a deadline.
+
+    A packaged GUI that opens a dialog never exits, and an unbounded
+    subprocess.run then waits with it — which is how a one-hour "build" happens
+    with no output at all.
+    """
+
+    SOURCE = (ROOT / "tools/build_release.py").read_text(encoding="utf-8")
+
+    def test_no_unbounded_subprocess_calls(self):
+        import re
+
+        for match in re.finditer(r"subprocess\.run\((.*?)\)", self.SOURCE, re.S):
+            call = match.group(1)
+            assert "timeout=" in call, f"subprocess.run without a timeout:\n{call}"
+
+    def test_timeout_errors_are_reported_as_build_failures(self):
+        assert "TimeoutExpired" in self.SOURCE
+        assert "did not finish within" in self.SOURCE or "did not exit within" in self.SOURCE
+
+    def test_a_hung_frozen_app_explains_itself(self):
+        """The message must name the likely cause, not just say 'timed out'."""
+        assert "QT_QPA_PLATFORM=offscreen" in self.SOURCE or "dialog" in self.SOURCE

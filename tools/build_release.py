@@ -58,12 +58,25 @@ def log(message: str) -> None:
     _echo(f"\n\033[1;36m==> {message}\033[0m" if sys.stdout.isatty() else f"\n==> {message}")
 
 
-def run(args: list[str], *, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
+def run(
+    args: list[str],
+    *,
+    check: bool = True,
+    capture: bool = False,
+    timeout: float = 1800,
+) -> subprocess.CompletedProcess:
     printable = " ".join(args)
     _echo(f"    $ {printable}")
-    result = subprocess.run(
-        args, cwd=ROOT, text=True, capture_output=capture, check=False
-    )
+    try:
+        result = subprocess.run(
+            args, cwd=ROOT, text=True, capture_output=capture, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Without this, a wedged child made the whole build hang silently until
+        # the CI job's own timeout killed the runner.
+        raise BuildError(
+            f"command did not finish within {timeout:.0f}s: {printable}"
+        ) from exc
     if check and result.returncode != 0:
         detail = (result.stdout or "") + (result.stderr or "")
         raise BuildError(f"command failed ({result.returncode}): {printable}\n{detail[-4000:]}")
@@ -82,6 +95,25 @@ def version() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _run_frozen(argv: list[str], *, env: dict, label: str, timeout: float = 300):
+    """Run the frozen product with a hard deadline.
+
+    A packaged GUI application is the one thing in this pipeline that can wedge
+    without printing anything: a modal dialog waits forever with no one to
+    dismiss it, and a captured subprocess call then waits with it. A deadline
+    turns that into a clear failure that says what to look at.
+    """
+    try:
+        return subprocess.run(argv, env=env, text=True, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise BuildError(
+            f"{label} did not exit within {timeout:.0f}s while running `{' '.join(argv[1:])}`. "
+            "A packaged GUI that opens a dialog or waits for an event loop never exits on a "
+            "headless machine; check that QT_QPA_PLATFORM=offscreen reaches it and that the "
+            "self-check path does not create a QApplication that is expected to run."
+        ) from exc
+
+
 def verify_install(executable: Path, *, label: str, windowed: bool) -> dict:
     """Run the packaged self-check inside the frozen product.
 
@@ -95,9 +127,7 @@ def verify_install(executable: Path, *, label: str, windowed: bool) -> dict:
 
     if windowed:
         print(f"    checking {label} (exit code only)")
-        result = subprocess.run(
-            [str(executable), "selfcheck"], env=env, text=True, capture_output=True
-        )
+        result = _run_frozen([str(executable), "selfcheck"], env=env, label=label)
         if result.returncode != 0:
             raise BuildError(
                 f"{label} failed its self-check (exit {result.returncode}).\n"
@@ -106,9 +136,7 @@ def verify_install(executable: Path, *, label: str, windowed: bool) -> dict:
         return {"ok": True, "checks": []}
 
     print(f"    checking {label}")
-    result = subprocess.run(
-        [str(executable), "selfcheck", "--json"], env=env, text=True, capture_output=True
-    )
+    result = _run_frozen([str(executable), "selfcheck", "--json"], env=env, label=label)
     payload: dict | None = None
     try:
         payload = json.loads(result.stdout[result.stdout.index("{"):])
@@ -259,7 +287,12 @@ def build_macos(args) -> dict:
 
     log("Generating icons")
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
-    subprocess.run([python, "tools/make_icons.py"], cwd=ROOT, env=env, check=False)
+    try:
+        subprocess.run(
+            [python, "tools/make_icons.py"], cwd=ROOT, env=env, check=False, timeout=180
+        )
+    except subprocess.TimeoutExpired:
+        raise BuildError("icon generation did not finish within 180s") from None
 
     log("Freezing the application bundle")
     for stale in ("build", "dist"):
