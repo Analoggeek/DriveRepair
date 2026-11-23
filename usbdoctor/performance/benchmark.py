@@ -60,6 +60,19 @@ class ReadBenchmark:
     read_errors: int = 0
     aborted: bool = False
     fadvise_supported: bool = False
+    #: Interface label the rating was computed against (e.g. the USB speed).
+    interface: str = ""
+    #: Plain-language rating vs what that interface should deliver.
+    rating: str = ""
+
+    def apply_rating(self, interface: str) -> "ReadBenchmark":
+        """Rate the measured speed against the *actual* connection speed."""
+        self.interface = interface or ""
+        if self.aborted or not self.mbps:
+            self.rating = "not measured"
+        else:
+            self.rating = rate_read_speed(self.median_mbps or self.mbps, interface)
+        return self
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +85,9 @@ class ReadBenchmark:
             "median_mbps": round(self.median_mbps, 2),
             "read_errors": self.read_errors,
             "aborted": self.aborted,
+            "interface": self.interface,
+            "rating": self.rating,
+            "expected_mbps": expected_read_speed(self.interface or "unknown"),
             "samples": [s.to_dict() for s in self.samples[:64]],
         }
 

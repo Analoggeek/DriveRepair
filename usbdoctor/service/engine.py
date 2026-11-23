@@ -513,6 +513,8 @@ class DoctorService:
             try:
                 with DiskReader(device.path, sector_size=device.sector_size) as reader:
                     bench = benchmark_read(reader, total_bytes=min(16 << 20, device.size_bytes or 0))
+                    # Rate against the real negotiated link speed, not a guess.
+                    bench.apply_rating(device.usb_speed or device.bus or "")
                     performance_payload = bench.to_dict()
                     if read_speed_bps is None and bench.mbps:
                         read_speed_bps = bench.mbps * 1e6

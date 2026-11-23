@@ -548,7 +548,7 @@ class ApiApp:
                 ("Content-Type", "text/event-stream; charset=utf-8"),
                 ("Cache-Control", "no-cache"),
                 ("X-Accel-Buffering", "no"),
-                ("Connection", "keep-alive"),
+                # NB: "Connection" is hop-by-hop and WSGI forbids setting it.
             ],
         )
         return _EventIterator(self.bus, since)
