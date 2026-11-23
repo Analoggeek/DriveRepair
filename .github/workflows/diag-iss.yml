@@ -1,0 +1,36 @@
+name: Diagnose installer script
+# Temporary: iterating on the Inno Setup script costs a full 25-minute build per
+# attempt. This exercises only the script against a dummy application folder.
+on:
+  workflow_dispatch:
+jobs:
+  iss:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Inno Setup 6
+        run: |
+          choco install innosetup --yes --no-progress
+          echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
+      - name: Build a dummy application folder
+        shell: bash
+        run: |
+          mkdir -p dist/USBDoctorAI/_internal dist/USBDoctorAI/docs
+          echo stub > dist/USBDoctorAI/USBDoctorAI.exe
+          echo stub > dist/USBDoctorAI/_internal/base_library.zip
+          echo stub > dist/USBDoctorAI/docs/readme.txt
+      - name: Compile the script and print everything
+        shell: cmd
+        continue-on-error: true
+        run: |
+          ISCC.exe installers\windows\usbdoctor.iss > iss.log 2>&1
+          type iss.log
+      - name: Show the error context
+        if: always()
+        shell: bash
+        run: |
+          echo "=== full log ==="
+          cat iss.log
+          echo "=== version ==="
+          ISCC.exe /? 2>&1 | head -5 || true
