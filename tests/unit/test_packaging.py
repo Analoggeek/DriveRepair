@@ -221,3 +221,64 @@ class TestReleaseBuilderOutput:
     def test_progress_goes_to_stderr_in_json_mode(self):
         result = self._run("--json")
         assert "==>" not in result.stdout
+
+
+class TestFailureReporting:
+    """This script is how a red CI build explains itself."""
+
+    SCRIPT = ROOT / ".github/scripts/report_failures.py"
+
+    def _run(self, *args):
+        import subprocess
+        import sys
+
+        return subprocess.run(
+            [sys.executable, str(self.SCRIPT), *args], capture_output=True, text=True
+        )
+
+    @staticmethod
+    def _junit(tmp_path, message="assert 404 == 200", with_file=True):
+        attributes = ' file="tests/integration/test_api.py"' if with_file else ""
+        xml = f'''<?xml version="1.0"?>
+<testsuites><testsuite name="pytest" tests="2" failures="1">
+  <testcase classname="tests.integration.test_api.TestApi" name="test_status"{attributes}>
+    <failure message="{message}">traceback</failure>
+  </testcase>
+  <testcase classname="tests.unit.test_ok" name="test_passes"/>
+</testsuite></testsuites>'''
+        path = tmp_path / "junit.xml"
+        path.write_text(xml)
+        return path
+
+    def test_a_failure_becomes_a_named_annotation(self, tmp_path):
+        result = self._run(str(self._junit(tmp_path)))
+        assert result.returncode == 0
+        assert "::error file=tests/integration/test_api.py::" in result.stdout
+        assert "TestApi.test_status" in result.stdout
+        assert "assert 404 == 200" in result.stdout
+
+    def test_passing_tests_are_not_annotated(self, tmp_path):
+        result = self._run(str(self._junit(tmp_path)))
+        assert "test_passes" not in result.stdout
+
+    def test_a_multiline_message_stays_on_one_line(self, tmp_path):
+        """A raw newline would truncate the workflow command mid-message."""
+        result = self._run(str(self._junit(tmp_path, message="line one&#10;line two")))
+        body = [line for line in result.stdout.splitlines() if line.startswith("::error")]
+        assert len(body) == 1, result.stdout
+        assert "line one" in body[0] and "line two" in body[0]
+
+    def test_percent_signs_are_escaped(self, tmp_path):
+        """GitHub decodes %XX in workflow commands; a bare % breaks the message."""
+        result = self._run(str(self._junit(tmp_path, message="usage was 90%")))
+        assert "%25" in result.stdout
+
+    def test_missing_report_is_itself_an_error(self, tmp_path):
+        result = self._run(str(tmp_path / "absent.xml"))
+        assert result.returncode == 1
+        assert "::error::" in result.stdout
+
+    def test_missing_file_attribute_is_tolerated(self, tmp_path):
+        result = self._run(str(self._junit(tmp_path, with_file=False)))
+        assert result.returncode == 0
+        assert "::error::FAILED" in result.stdout
