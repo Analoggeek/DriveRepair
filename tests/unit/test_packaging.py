@@ -497,3 +497,41 @@ class TestPhaseAnnotations:
 
         match = re.search(r'print\(f"::warning title=build phase::\{message\}"(.*?)\)', self.SOURCE)
         assert match and "flush=True" in match.group(1)
+
+
+class TestInstallerScript:
+    """Checks on the Inno Setup script that a compiler failure taught us.
+
+    The Windows build once reached the very last step and then died on
+    ``Check: WizardSilent = False``: the Check parameter is evaluated by Inno's
+    own expression evaluator, which has no "=" operator. A compile is the only
+    real test, and it needs Windows, so guard the rule here instead.
+    """
+
+    SCRIPT = (ROOT / "installers/windows/usbdoctor.iss").read_text(encoding="utf-8")
+
+    def test_no_check_parameter_uses_an_equals_sign(self):
+        import re
+
+        for match in re.finditer(r"Check:\s*([^;\n]+)", self.SCRIPT):
+            assert "=" not in match.group(1).replace("<>", "").replace(">=", "").replace("<=", ""), (
+                f"Inno's expression evaluator rejects '=': Check: {match.group(1).strip()}"
+            )
+
+    def test_the_selfcheck_entry_runs_only_for_a_watching_user(self):
+        entry = [line for line in self.SCRIPT.splitlines() if 'Parameters: "selfcheck"' in line]
+        assert entry, "the installer no longer verifies the installed copy"
+        assert "skipifsilent" in entry[0]
+
+    def test_the_installer_is_64_bit_only(self):
+        """Raw 64-bit device addressing is the whole product."""
+        assert "ArchitecturesAllowed=x64compatible" in self.SCRIPT
+
+    def test_every_file_the_app_needs_is_checked_after_install(self):
+        code = self.SCRIPT[self.SCRIPT.index("[Code]"):]
+        for required in ("USBDoctorAI.exe", "_internal", "docs"):
+            assert required in code, f"the post-install check does not verify {required}"
+
+    def test_the_build_does_not_depend_on_a_quick_launch_shortcut(self):
+        """It is a Windows 95-era target and it forced an admin-mode warning."""
+        assert "quicklaunch" not in self.SCRIPT.lower()
