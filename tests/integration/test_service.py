@@ -456,6 +456,34 @@ class TestServiceRecovery:
         assert "disclaimer" in result
 
 
+class TestServiceRecoveryFallback:
+    def test_auto_carves_when_the_file_system_cannot_be_walked(self, service, tmp_path):
+        """A destroyed boot sector must fall through to content carving, not return 0 files."""
+        path = tmp_path / "nosig.img"
+        F.build_fat32(path, 32 * 1024 * 1024)
+        data = bytearray(path.read_bytes())
+        data[0:512] = b"\x00" * 512
+        # A complete JPEG in free space, so there is real content to find.
+        with open(path, "r+b") as fh:
+            fh.seek(4 << 20)
+            fh.write(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"\x00" * 3000 + b"\xff\xd9")
+        result = service.recover(str(path), method="auto", output_dir=str(tmp_path / "out"))
+        assert result["method"] == "carve"
+        assert result["files_recovered"] == 1
+        carved = [p for p in (tmp_path / "out").rglob("*.jpg")]
+        assert len(carved) == 1
+        assert 3000 < carved[0].stat().st_size < 4000
+
+    def test_state_dir_accepts_a_plain_string(self):
+        import tempfile
+
+        from usbdoctor.service import DoctorService
+
+        svc = DoctorService(state_dir=tempfile.mkdtemp())
+        assert svc.state_dir.exists()
+        assert svc.scan  # constructed correctly
+
+
 class TestServiceStatus:
     def test_status_reports_real_tool_availability(self, service):
         status = service.status()

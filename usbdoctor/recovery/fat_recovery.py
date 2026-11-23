@@ -140,14 +140,34 @@ class FatRecovery:
                 "root_cluster": root_cluster,
                 "cluster_count": cluster_count,
             }
-        bps = struct.unpack("<H", boot[11:13])[0] or 512
-        spc = boot[13] or 1
+        # Validation: without this, an all-zero or corrupted sector computes
+        # plausible-looking geometry and the walker silently exports nothing.
+        # A real FAT boot sector must end with 0x55AA and have sane field values.
+        if boot[510:512] != b"\x55\xaa":
+            return {"type": "unknown", "reason": "boot sector signature missing"}
+        bps = struct.unpack("<H", boot[11:13])[0]
+        if bps not in (512, 1024, 2048, 4096):
+            return {"type": "unknown", "reason": f"implausible bytes-per-sector {bps}"}
+        spc = boot[13]
+        if spc == 0 or spc & (spc - 1):
+            return {"type": "unknown", "reason": f"bytes-per-cluster is not a power of two ({spc})"}
         reserved = struct.unpack("<H", boot[14:16])[0]
-        num_fats = boot[16] or 2
+        if reserved == 0:
+            return {"type": "unknown", "reason": "reserved sector count is zero"}
+        num_fats_raw = boot[16]
+        if num_fats_raw not in (1, 2):
+            return {"type": "unknown", "reason": f"implausible FAT copy count ({num_fats_raw})"}
+
+        num_fats = num_fats_raw
         root_entries = struct.unpack("<H", boot[17:19])[0]
         total = struct.unpack("<H", boot[19:21])[0] or struct.unpack("<I", boot[32:36])[0]
         fat_size = struct.unpack("<H", boot[22:24])[0] or struct.unpack("<I", boot[36:40])[0]
         data_start = (reserved + num_fats * fat_size) * bps
+        if total == 0 or fat_size == 0:
+            return {"type": "unknown", "reason": "volume geometry is empty"}
+        data_start_bytes = data_start
+        if data_start_bytes >= total * bps:
+            return {"type": "unknown", "reason": "file tables overlap the whole volume"}
         clusters = (total * bps - data_start) // (bps * spc) if bps and spc else 0
         vtype = "fat32" if fat_size and struct.unpack("<I", boot[36:40])[0] else (
             "fat12" if clusters < 4085 else "fat16"

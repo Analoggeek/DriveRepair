@@ -131,7 +131,9 @@ class DoctorService:
         bus: Optional[EventBus] = None,
         settings: Optional[PolicySettings] = None,
     ) -> None:
-        self.state_dir = state_dir or default_state_dir()
+        # Accept str or Path: callers (CLI, tests, the desktop shell) all pass
+        # different things and a TypeError deep in a scan would be confusing.
+        self.state_dir = Path(state_dir) if state_dir else default_state_dir()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.bus = bus or EventBus()
         self.policy = SafetyPolicy(settings or PolicySettings())
@@ -791,6 +793,9 @@ class DoctorService:
                     ).recover()
                     payload = fat.to_dict()
                     payload["method"] = "filesystem"
+                    # A destroyed boot sector means there is no walkable file system.
+                    # 'auto' must then fall through to carving instead of returning
+                    # an empty (and misleadingly successful) result.
                     if method == "auto" and fat.files_recovered == 0:
                         emit("stage", {"stage": "carving", "message": "No directory entries — carving content"})
                         scan_len = length or (reader.size() - 0)
@@ -806,6 +811,13 @@ class DoctorService:
                         payload["carved"] = carved.to_dict()
                         payload["files_recovered"] = len(carved.files)
                         payload["bytes_recovered"] = carved.bytes_written
+                        # Report only what actually happened.
+                        if fat.volume_type in ("unknown", ""):
+                            payload["method"] = "carve"
+                        elif fat.entries_seen:
+                            payload["method"] = "filesystem+carve"
+                        else:
+                            payload["method"] = "carve"
                 elif method == "carve":
                     carver = Carver(
                         reader,

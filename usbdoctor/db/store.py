@@ -88,7 +88,7 @@ class ScanRecord:
 
 class HistoryStore:
     def __init__(self, path: Optional[Path] = None) -> None:
-        self.path = path or (default_state_dir() / "history.db")
+        self.path = Path(path) if path else (default_state_dir() / "history.db")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._initialise()

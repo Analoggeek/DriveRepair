@@ -62,6 +62,17 @@ class EventBus:
         with self._lock:
             return [e for e in self._replay if e.seq > since_seq]
 
+    def cursor(self) -> int:
+        """Latest published sequence number (0 when nothing has happened yet)."""
+        with self._lock:
+            return self._seq
+
+    def events_since(self, since_seq: int, *, limit: int = 200) -> list[dict[str, Any]]:
+        """Replay buffer access for poll/SSE clients, newest-last."""
+        with self._lock:
+            events = [e.to_dict() for e in self._replay if e.seq > since_seq]
+        return events[:limit]
+
     def emitter(self, job_id: str) -> Callable[[str, Optional[dict[str, Any]]], None]:
         def emit(type_: str, payload: Optional[dict[str, Any]] = None) -> None:
             self.publish(job_id, type_, payload)

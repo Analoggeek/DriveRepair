@@ -188,3 +188,65 @@ class TestFatFileRecovery:
         with DiskReader(str(vol)) as reader:
             FatRecovery(reader, str(tmp_path / "out")).recover()
         assert vol.read_bytes() == before
+
+
+class TestGeometryValidation:
+    """A destroyed boot sector must never be mis-identified as a valid volume."""
+
+    def test_zeroed_boot_sector_is_reported_unknown_not_fat12(self, tmp_path):
+        from usbdoctor.core.io import DiskReader
+        from usbdoctor.recovery.fat_recovery import FatRecovery
+
+        image = tmp_path / "zeroed.img"
+        F.build_fat32(image, 16 << 20)
+        data = bytearray(image.read_bytes())
+        data[0:512] = b"\x00" * 512
+        image.write_bytes(data)
+
+        with DiskReader(str(image)) as reader:
+            walker = FatRecovery(reader, str(tmp_path / "out"))
+            geometry = walker._geometry()  # noqa: SLF001 - the validation IS the unit under test
+            assert geometry["type"] == "unknown"
+            assert "signature" in geometry["reason"]
+            result = walker.recover()
+            assert result.volume_type == "unknown"
+            assert result.files_recovered == 0
+            assert any("Unsupported volume type" in note for note in result.notes)
+
+    def test_boot_sector_without_end_marker_is_rejected(self, tmp_path):
+        from usbdoctor.core.io import DiskReader
+        from usbdoctor.recovery.fat_recovery import FatRecovery
+
+        image = tmp_path / "no-sig.img"
+        F.build_fat32(image, 16 << 20)
+        data = bytearray(image.read_bytes())
+        data[510:512] = b"\x00\x00"  # valid fields, missing 0x55AA
+        image.write_bytes(data)
+        with DiskReader(str(image)) as reader:
+            assert FatRecovery(reader, str(tmp_path / "out"))._geometry()["type"] == "unknown"
+
+    def test_implausible_geometry_is_rejected(self, tmp_path):
+        from usbdoctor.core.io import DiskReader
+        from usbdoctor.recovery.fat_recovery import FatRecovery
+
+        image = tmp_path / "bad-geometry.img"
+        F.build_fat32(image, 16 << 20)
+        data = bytearray(image.read_bytes())
+        data[13] = 3  # bytes-per-cluster not a power of two
+        image.write_bytes(data)
+        with DiskReader(str(image)) as reader:
+            geometry = FatRecovery(reader, str(tmp_path / "out"))._geometry()
+            assert geometry["type"] == "unknown"
+            assert "power of two" in geometry["reason"]
+
+    def test_a_genuine_volume_still_parses(self, tmp_path):
+        from usbdoctor.core.io import DiskReader
+        from usbdoctor.recovery.fat_recovery import FatRecovery
+
+        image = tmp_path / "good.img"
+        geo = F.build_fat32(image, 16 << 20)
+        F.add_fat32_file(image, "KEEP.TXT", b"payload", geo)
+        with DiskReader(str(image)) as reader:
+            walker = FatRecovery(reader, str(tmp_path / "out"))
+            assert walker._geometry()["type"] == "fat32"
+            assert walker.recover().files_recovered == 1
