@@ -74,8 +74,30 @@ jobs:
         shell: bash
         run: python .github/scripts/report_failures.py junit.xml pytest.log || true
 
+      # PySide6 ships the Qt libraries but links against the system's graphics
+      # and X stacks. Without these, importing QtWidgets raises
+      # "libGL.so.1: cannot open shared object file" and the whole desktop test
+      # module fails at collection — which is what turned this job red while
+      # every other platform was fine.
+      - name: Install the Qt system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 \
+            libfontconfig1 libfreetype6 libglib2.0-0 \
+            libxcb1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xkb1 \
+            libxcb-xfixes0 libxcb-sync1 libxcb-shm0 libxcb-util1
+
       - name: Install the desktop dependency
         run: python -m pip install "PySide6-Essentials>=6.5"
+
+      - name: Prove Qt can start before running UI tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -c "from PySide6.QtWidgets import QApplication; app = QApplication([]); print('Qt', app.platformName(), 'ready')"
 
       - name: Desktop UI tests
         env:

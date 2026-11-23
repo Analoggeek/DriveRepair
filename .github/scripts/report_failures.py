@@ -59,8 +59,13 @@ def main(argv: list[str]) -> int:
             name = case.get("name") or "<unnamed test>"
             classname = case.get("classname") or ""
             path = (case.get("file") or "").replace("\\", "/")
-            detail = clip(node.get("message") or (node.text or ""))
+            # pytest leaves `message` empty for a collection error, and the
+            # useful part (which import failed and why) is in the element text.
+            detail = clip(node.get("message") or "") or clip(node.text or "")
             label = f"{classname}.{name}" if classname else name
+            if kind == "error" and not classname:
+                # A collection error is filed under the module being collected.
+                label = f"collection of {name}"
             # pytest only emits the `file` attribute in some versions; an empty
             # "file=" would make the whole command malformed.
             location = f" file={path}" if path else ""

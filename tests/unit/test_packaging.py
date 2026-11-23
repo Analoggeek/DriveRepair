@@ -282,3 +282,28 @@ class TestFailureReporting:
         result = self._run(str(self._junit(tmp_path, with_file=False)))
         assert result.returncode == 0
         assert "::error::FAILED" in result.stdout
+
+
+class TestCollectionErrorReporting:
+    """A collection error has an empty `message`; its text holds the reason."""
+
+    SCRIPT = ROOT / ".github/scripts/report_failures.py"
+
+    def test_the_traceback_is_reported_when_message_is_empty(self, tmp_path):
+        import subprocess
+        import sys
+
+        xml = '''<?xml version="1.0"?>
+<testsuites><testsuite name="pytest" errors="1" tests="1">
+  <testcase classname="" name="tests/integration/test_desktop.py">
+    <error message="">ImportError: libGL.so.1: cannot open shared object file</error>
+  </testcase>
+</testsuite></testsuites>'''
+        report = tmp_path / "junit.xml"
+        report.write_text(xml)
+        result = subprocess.run(
+            [sys.executable, str(self.SCRIPT), str(report)], capture_output=True, text=True
+        )
+        assert result.returncode == 0
+        assert "libGL.so.1" in result.stdout, result.stdout
+        assert "collection of tests/integration/test_desktop.py" in result.stdout
