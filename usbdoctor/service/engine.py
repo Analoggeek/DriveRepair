@@ -258,6 +258,14 @@ class DoctorService:
         return None
 
     # ------------------------------------------------------------------ scan
+    def last_scan(self, device_path: str) -> Optional[ScanResult]:
+        """The most recent completed scan for this device path, if any.
+
+        A scan is the only thing that produces findings, plans and a diagnosis,
+        so the pages that display them read from here rather than re-scanning.
+        """
+        return self._last_scan.get(device_path)
+
     def scan(self, device_path: str, options: Optional[ScanOptions] = None) -> ScanResult:
         """Full read-only diagnosis. Never writes to the device."""
         options = options or ScanOptions()

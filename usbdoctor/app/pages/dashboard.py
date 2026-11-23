@@ -176,7 +176,7 @@ class DashboardPage(QWidget):
         self.last_scan = None
         self.verdict_body.setText("No scan yet for this drive in this session.")
         try:
-            self.last_scan = self.service._last_scan.get(path)  # noqa: SLF001
+            self.last_scan = self.service.last_scan(path)
         except Exception:
             self.last_scan = None
         if self.last_scan is not None:

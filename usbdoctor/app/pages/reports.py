@@ -102,7 +102,7 @@ class ReportsPage(QWidget):
     def _bundle(self) -> Optional[ReportBundle]:
         if not self.device_path:
             return None
-        scan = self.service._last_scan.get(self.device_path)  # noqa: SLF001
+        scan = self.service.last_scan(self.device_path)
         if scan is None:
             return None
         data = scan.to_dict()

@@ -122,7 +122,7 @@ class AssistantPage(QWidget):
     def apply_last_scan(self) -> None:
         if not self.device_path:
             return
-        scan = self.service._last_scan.get(self.device_path)  # noqa: SLF001
+        scan = self.service.last_scan(self.device_path)
         if scan is not None:
             self.apply_scan(scan.to_dict())
 

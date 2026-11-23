@@ -128,7 +128,7 @@ class PerformancePage(QWidget):
     def apply_last_scan(self) -> None:
         if not self.device_path:
             return
-        scan = self.service._last_scan.get(self.device_path)  # noqa: SLF001
+        scan = self.service.last_scan(self.device_path)
         if scan is None:
             self.read_facts.set_pairs([("Status", "run a health scan to measure speed")])
             self.rating_badge.set_status("not measured", "neutral")
