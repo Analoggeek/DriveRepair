@@ -84,14 +84,21 @@ jobs:
 
       - name: Run the test suite
         shell: bash
-        timeout-minutes: 30
+        # Windows needs far longer than Linux for the same suite (process spawns
+        # are expensive there), so the whole-step budget is generous while
+        # --timeout keeps one stuck test from eating all of it.
+        timeout-minutes: 45
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          set -o pipefail
-          python -m pytest tests -q --tb=short -ra \
+          # Redirect rather than pipe: a test that leaves a child process holding
+          # stdout keeps a pipe open, and the step then waits on tee long after
+          # pytest has finished. --durations names whatever is slow.
+          python -u -m pytest tests -q --tb=short -ra --durations=15 \
             --timeout=180 --timeout-method=thread \
-            --junitxml=junit-build.xml --durations=15 2>&1 | tee pytest-build.log
+            --junitxml=junit-build.xml > pytest-build.log 2>&1 || status=$?
+          tail -c 3000 pytest-build.log
+          exit "${status:-0}"
 
       - name: Report test failures
         if: failure()
@@ -224,14 +231,21 @@ jobs:
       # when the captured log does not survive the runner.
       - name: Run the test suite
         shell: bash
-        timeout-minutes: 30
+        # Windows needs far longer than Linux for the same suite (process spawns
+        # are expensive there), so the whole-step budget is generous while
+        # --timeout keeps one stuck test from eating all of it.
+        timeout-minutes: 45
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          set -o pipefail
-          python -m pytest tests -q --tb=short -ra \
+          # Redirect rather than pipe: a test that leaves a child process holding
+          # stdout keeps a pipe open, and the step then waits on tee long after
+          # pytest has finished. --durations names whatever is slow.
+          python -u -m pytest tests -q --tb=short -ra --durations=15 \
             --timeout=180 --timeout-method=thread \
-            --junitxml=junit-build.xml --durations=15 2>&1 | tee pytest-build.log
+            --junitxml=junit-build.xml > pytest-build.log 2>&1 || status=$?
+          tail -c 3000 pytest-build.log
+          exit "${status:-0}"
 
       - name: Report test failures
         if: failure()

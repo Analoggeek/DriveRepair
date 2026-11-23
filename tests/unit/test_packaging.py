@@ -44,16 +44,18 @@ class TestPyInstallerSpecs:
         assert block, f"{spec.name} has no hiddenimports list"
         modules = re.findall(r'"([\w.]+)"', block.group(1))
         assert modules, "hiddenimports is empty"
-        import importlib
+        import importlib.util
 
         for module in modules:
-            # GUI modules need PySide6; skip rather than fail when it is absent,
-            # because the module name is what is under test, not the dependency.
+            # Find the module, do not import it. What is under test is the name in
+            # the spec; importing PySide6 pulls in Qt's native libraries, which
+            # fail on a headless box for reasons that have nothing to do with
+            # packaging (libGL.so.1), and would turn this into a false alarm.
             try:
-                importlib.import_module(module)
-            except ModuleNotFoundError as exc:
-                if exc.name == "PySide6":
-                    pytest.skip("PySide6 not installed")
+                found = importlib.util.find_spec(module)
+            except ModuleNotFoundError:
+                found = None
+            if found is None:
                 pytest.fail(f"{spec.name} lists a hidden import that does not exist: {module}")
 
     @pytest.mark.parametrize("spec", SPECS)

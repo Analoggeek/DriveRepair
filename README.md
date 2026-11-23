@@ -76,8 +76,13 @@ connection is needed to install or to run.
 Run the app as administrator — raw device access and SMART queries require
 elevation.
 
-Prefer no installation? `USBDoctorAI-1.0.0-portable.zip` is the same program,
+Prefer no installation? `USBDoctorAI-1.0.0-x64-portable.zip` is the same program,
 unpack and run `USBDoctorAI.exe`.
+
+The build is unsigned, so Windows SmartScreen shows *"Windows protected your
+PC"* on the first run: choose **More info → Run anyway**. Nothing is being
+downloaded at that point — the warning is about the missing signature, not about
+the app reaching the internet, which it never does.
 
 ### macOS 11+
 
@@ -85,6 +90,34 @@ Download the disk image for your Mac — `USBDoctorAI-1.0.0-arm64.dmg` for Apple
 Silicon or `...-x64.dmg` for Intel — open it, drag **USB Doctor AI** to
 *Applications*, then launch it. Fully offline, like the Windows installer.
 macOS asks for permission the first time the app reads a removable volume — allow it.
+
+The disk images are unsigned and not notarised, so Gatekeeper refuses the first
+launch. Either right-click the app and choose **Open**, or clear the quarantine
+flag once:
+
+```bash
+# Finder shows the app as "USB Doctor AI"; on disk the bundle is USBDoctorAI.app
+xattr -dr com.apple.quarantine "/Applications/USBDoctorAI.app"
+```
+
+Intel Macs are the last platform that needs the `x64` image; Apple Silicon
+runs the `arm64` build natively.
+
+### Verify what you downloaded
+
+Every release ships `SHA256SUMS-<platform>.txt`. Windows:
+
+```powershell
+Get-FileHash USBDoctorAI-Setup-1.0.0.exe -Algorithm SHA256
+```
+
+macOS:
+
+```bash
+shasum -a 256 USBDoctorAI-1.0.0-arm64.dmg
+```
+
+Compare with the matching line in the checksum file before you run anything.
 
 ### From source (any platform)
 
