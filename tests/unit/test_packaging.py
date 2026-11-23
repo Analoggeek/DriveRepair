@@ -504,3 +504,45 @@ class TestFreezeBudget:
             call = match.group(0)
             if "PyInstaller" in call or "probe_args" in call:
                 assert "FREEZE_TIMEOUT" in call, f"PyInstaller call without the freeze budget:\n{call[:160]}"
+
+
+class TestPhaseAnnotations:
+    """A lost log must not lose the progress information.
+
+    Python's captured output vanished on the Windows runner while the shell's
+    own output arrived, so the only reliable channel was annotations. Each build
+    phase is published as one, which localises a failure even with an empty log.
+    """
+
+    SOURCE = (ROOT / "tools/build_release.py").read_text(encoding="utf-8")
+
+    def test_log_publishes_an_annotation_under_github_actions(self):
+        assert 'GITHUB_ACTIONS' in self.SOURCE
+        assert '::warning title=build phase::' in self.SOURCE
+
+    def test_annotations_are_flushed(self):
+        """An unflushed annotation is exactly as useful as an unflushed log."""
+        import re
+
+        match = re.search(r'print\(f"::warning title=build phase::\{message\}"(.*?)\)', self.SOURCE)
+        assert match, "phase annotation not found"
+        assert "flush=True" in match.group(1)
+
+
+def test_phase_annotation_format_is_valid():
+    """GitHub only parses the command when it starts the line."""
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, GITHUB_ACTIONS="1")
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "tools/build_release.py"), "--dry-run"],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=ROOT,
+    )
+    for line in result.stdout.splitlines():
+        if "::warning" in line:
+            assert line.startswith("::warning"), line

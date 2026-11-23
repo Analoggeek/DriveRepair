@@ -58,6 +58,11 @@ def _echo(message: str) -> None:
 
 def log(message: str) -> None:
     _echo(f"\n\033[1;36m==> {message}\033[0m" if sys.stdout.isatty() else f"\n==> {message}")
+    # Also publish the phase as a GitHub annotation. A build whose log is lost
+    # still shows which phase it reached, because annotations travel separately
+    # from the captured output.
+    if os.environ.get("GITHUB_ACTIONS") == "1":
+        print(f"::warning title=build phase::{message}", flush=True)
 
 
 # Set for every child process the build starts. A nested build refuses to run:
