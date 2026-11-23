@@ -43,6 +43,20 @@ Nothing is downloaded during install or first run. The only optional network use
 is the allow-listed official-source research feature, and it can be turned off in
 Settings.
 
+### CI runner images
+
+`release.yml` builds on `windows-latest`, `macos-15` (Apple Silicon) and
+`macos-15-intel` (Intel). Those labels are deliberate: `macos-13` was retired in
+December 2025 and `macos-14` on 2 November 2026, and **GitHub does not reject a
+job that asks for a retired macOS label** — it accepts it and no runner ever
+claims it, so the job sits queued while the run looks healthy. Both build jobs
+also carry a timeout, which turns a stalled queue into a red run.
+
+`macos-15-intel` is the last Intel image GitHub will publish; Apple has ended
+x86_64 support and this label retires in autumn 2027. When it goes, the Intel
+DMG goes with it — the Apple Silicon image is the future, and the Intel one
+exists only while there are Macs left to install it on.
+
 ### Why it cannot be cross-compiled
 
 PyInstaller bundles the host's Python interpreter and the host's Qt binaries, so

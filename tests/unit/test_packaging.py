@@ -307,3 +307,52 @@ class TestCollectionErrorReporting:
         assert result.returncode == 0
         assert "libGL.so.1" in result.stdout, result.stdout
         assert "collection of tests/integration/test_desktop.py" in result.stdout
+
+
+class TestRunnerLabels:
+    """A retired runner label is invisible: the job queues and never starts.
+
+    That is exactly how this release was blocked. GitHub accepts a job for
+    ``macos-13`` and no runner ever claims it, so the run looks healthy and
+    pending instead of failing. ``macos-13`` was retired in December 2025 and
+    ``macos-14`` on 2 November 2026; the live Intel label is ``macos-15-intel``.
+    """
+
+    RETIRED = {"macos-12", "macos-13", "macos-14", "macos-13-large", "macos-14-large"}
+
+    def _workflows(self):
+        yaml = pytest.importorskip("yaml", reason="PyYAML not installed")
+        return {
+            path.name: yaml.safe_load(path.read_text())
+            for path in (ROOT / ".github/workflows").glob("*.yml")
+        }
+
+    def test_no_retired_macos_runner_labels(self):
+        offenders = []
+        for name, workflow in self._workflows().items():
+            for job_name, job in workflow.get("jobs", {}).items():
+                labels = [job.get("runs-on")]
+                for leg in (job.get("strategy", {}).get("matrix", {}).get("include") or []):
+                    labels.append(leg.get("runner"))
+                for label in labels:
+                    if isinstance(label, str) and label in self.RETIRED:
+                        offenders.append(f"{name}:{job_name} uses retired {label}")
+        assert not offenders, "\n".join(offenders)
+
+    def test_the_intel_macos_leg_uses_an_intel_label(self):
+        """macos-latest/macos-15 are arm64; requesting x64 on them builds the wrong arch."""
+        workflow = self._workflows()["release.yml"]
+        legs = workflow["jobs"]["macos"]["strategy"]["matrix"]["include"]
+        intel = [leg for leg in legs if leg["arch"] == "x64"]
+        assert len(intel) == 1, legs
+        assert "intel" in intel[0]["runner"], (
+            f"{intel[0]['runner']} is an arm64 image; the x64 build needs an -intel label"
+        )
+
+    def test_build_jobs_have_a_timeout(self):
+        """Without one, a stalled queue stays pending forever instead of going red."""
+        workflow = self._workflows()["release.yml"]
+        for job_name in ("windows", "macos"):
+            assert workflow["jobs"][job_name].get("timeout-minutes"), (
+                f"{job_name} has no timeout; a queued job can hang indefinitely"
+            )

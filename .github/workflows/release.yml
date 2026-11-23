@@ -58,6 +58,8 @@ jobs:
     name: Windows installer
     needs: test
     runs-on: windows-latest
+    # A stalled queue must become a red run, not a permanently pending one.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -106,14 +108,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Live labels only. macos-13 (Intel) was retired in December 2025: GitHub
+        # keeps accepting jobs for a retired label but no runner ever claims one,
+        # so the Intel leg sat queued for 80 minutes looking perfectly healthy.
+        # macos-14 was retired on 2 November 2026 and now fails outright.
+        # macos-15-intel is the last Intel image GitHub will publish; Apple has
+        # ended x86_64 support and this label is expected to retire in 2027.
         include:
-          - runner: macos-14
+          - runner: macos-15
             arch: arm64
             label: AppleSilicon
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: x64
             label: Intel
     runs-on: ${{ matrix.runner }}
+    # A stalled queue must become a red run, not a permanently pending one.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
