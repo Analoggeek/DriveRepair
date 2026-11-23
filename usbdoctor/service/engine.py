@@ -535,6 +535,46 @@ class DoctorService:
         # ---- evidence, health, plans, diagnosis -------------------------------
         emit("stage", {"stage": "analysis", "message": "Evaluating evidence"})
         device_snapshot = self.device(device.path) or device
+        # A file system found at offset 0 with no partition table is a
+        # "superfloppy" — the normal layout for most USB flash drives. Whatever
+        # the raw sector-0 check concluded, that layout is valid: there is no
+        # partition table to restore, and offering one would be a destructive
+        # non-fix on healthy media.
+        no_partitions_defined = (
+            partition_info.get("scheme") in ("none", "unknown", "superfloppy")
+            or not (partition_info.get("entries") or [])
+        )
+        # Only a *sound* volume at LBA 0 justifies dismissing the partition-table
+        # warnings. If the file system itself reports a damaged boot sector, the
+        # missing 0x55AA is real damage and must stay in the record.
+        volume_damaged = any(
+            getattr(i, "code", "") in (
+                "FILESYSTEM_METADATA_DAMAGED", "FAT_BACKUP_REQUIRED",
+                "FAT_BOOT_BOTH_INVALID", "EXFAT_BOOT_CHECKSUM", "NTFS_BOOT_INVALID",
+                "FAT32_FSINFO_INVALID", "FAT_COPIES_DIFFER", "FAT_BOTH_COPIES_INVALID",
+            )
+            for i in fs_issues
+        )
+        if detected_fs not in ("unknown", "") and no_partitions_defined and not volume_damaged:
+            partition_info["scheme"] = "superfloppy"
+            partition_issues = [
+                issue
+                for issue in partition_issues
+                if getattr(issue, "code", "") not in ("MBR_SIGNATURE_MISSING", "MBR_NO_PARTITIONS")
+            ]
+            if not any(getattr(i, "code", "") == "NO_PARTITION_TABLE" for i in partition_issues):
+                from usbdoctor.analysis.partitions.tables import TableIssue
+
+                partition_issues.insert(
+                    0,
+                    TableIssue(
+                        "info",
+                        "NO_PARTITION_TABLE",
+                        "No partition table: the file system is stored directly on the "
+                        "device (common for USB flash drives). This is a valid layout, "
+                        "not damage.",
+                    ),
+                )
         evidence = ScanEvidence(
             device=device_snapshot,
             filesystem=detected_fs,

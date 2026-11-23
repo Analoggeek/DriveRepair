@@ -32,6 +32,11 @@ class Health(IntEnum):
     def label(self) -> str:
         return self.name
 
+    def __str__(self) -> str:
+        # Without this, an IntEnum prints as a bare number ("4"), which used to
+        # leak into CLI output, notifications and report headers.
+        return self.name
+
     @property
     def color(self) -> str:
         return {

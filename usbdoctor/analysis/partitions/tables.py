@@ -169,12 +169,29 @@ def parse_mbr(sector: bytes, disk_size: int, *, sector_size: int = 512) -> Parti
         result.issues.append(TableIssue("critical", "MBR_TRUNCATED", "Sector 0 could not be read."))
         return result
     if sector[510:512] != MBR_SIGNATURE:
+        # A missing 0x55AA is damage, not a layout: every valid FAT, exFAT and
+        # NTFS boot record carries its own 0x55AA at offset 510, so a
+        # superfloppy cannot lack it. Recognise the *file system* that is still
+        # sitting at LBA 0 so the diagnosis can say "the volume is here, its
+        # boot signature is gone" instead of "the disk is uninitialised", and
+        # so the repair targets the volume rather than inventing a table.
         result.scheme = "none"
+        boot_record = sector[3:11]
+        fs_at_lba0 = (
+            boot_record in (b"NTFS    ", b"EXFAT   ")
+            or boot_record == b"MSWIN4.1"
+            or sector[82:90] == b"FAT32   "
+            or sector[54:62] in (b"FAT16   ", b"FAT12   ")
+            or sector[0:4] == b"NXSB"
+        )
+        if fs_at_lba0:
+            result.details["volume_at_lba0"] = True
         result.issues.append(
             TableIssue(
                 "critical",
                 "MBR_SIGNATURE_MISSING",
-                "Boot signature 0x55AA is missing at offset 510 — the partition table is blank or destroyed.",
+                "Boot signature 0x55AA is missing at offset 510 — the partition table is blank or destroyed."
+                + (" A file-system boot record is still present at offset 0." if fs_at_lba0 else ""),
                 repairable=True,
             )
         )
