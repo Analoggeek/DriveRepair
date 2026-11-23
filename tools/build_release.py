@@ -58,18 +58,31 @@ def log(message: str) -> None:
     _echo(f"\n\033[1;36m==> {message}\033[0m" if sys.stdout.isatty() else f"\n==> {message}")
 
 
+# Set for every child process the build starts. A nested build refuses to run:
+# the build runs the test suite, and the suite exercises this tool, so without a
+# marker one build can spawn another, which spawns another, forever.
+IN_PROGRESS_ENV = "USBDOCTOR_BUILD_IN_PROGRESS"
+
+
 def run(
     args: list[str],
     *,
     check: bool = True,
     capture: bool = False,
-    timeout: float = 1800,
+    timeout: float = 900,
+    env: dict | None = None,
 ) -> subprocess.CompletedProcess:
     printable = " ".join(args)
     _echo(f"    $ {printable}")
     try:
         result = subprocess.run(
-            args, cwd=ROOT, text=True, capture_output=capture, check=False, timeout=timeout
+            args,
+            cwd=ROOT,
+            text=True,
+            capture_output=capture,
+            check=False,
+            timeout=timeout,
+            env={**os.environ, **(env or {}), IN_PROGRESS_ENV: "1"},
         )
     except subprocess.TimeoutExpired as exc:
         # Without this, a wedged child made the whole build hang silently until
@@ -200,7 +213,7 @@ def build_windows(args) -> dict:
 
     log("Running the test suite")
     if not args.skip_tests:
-        run([python, "-m", "pytest", "tests", "-q"])
+        run([python, "-m", "pytest", "tests", "-q"], env={IN_PROGRESS_ENV: "1"})
 
     log("Generating icons")
     run([python, "tools/make_icons.py"], check=False)  # Qt may be missing a display
@@ -283,7 +296,7 @@ def build_macos(args) -> dict:
 
     log("Running the test suite")
     if not args.skip_tests:
-        run([python, "-m", "pytest", "tests", "-q"])
+        run([python, "-m", "pytest", "tests", "-q"], env={IN_PROGRESS_ENV: "1"})
 
     log("Generating icons")
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
@@ -351,6 +364,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--portable-only", action="store_true",
                         help="skip the OS installer and produce only the portable zip")
     parser.add_argument("--json", action="store_true", help="print a machine-readable summary")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="check the host and report what would be built, without building anything",
+    )
     args = parser.parse_args(argv)
 
     global _json_mode
@@ -358,9 +376,49 @@ def main(argv: list[str] | None = None) -> int:
 
     started = time.time()
     system = platform.system()
+
+    # Refuse to nest. The build runs the test suite; the suite exercises this
+    # tool; without this, `build_release.py` on a build-capable host calls
+    # itself, then itself again, until the runner dies or the job times out.
+    if os.environ.get(IN_PROGRESS_ENV) == "1" and not args.dry_run:
+        print(
+            f"\n\033[1;31mBUILD FAILED\033[0m\nrefusing to start a build inside a build "
+            f"({IN_PROGRESS_ENV}=1). Use --dry-run from tests.",
+            file=sys.stderr,
+        )
+        if _json_mode:
+            print(json.dumps({"status": "failed", "host": system, "artifacts": [],
+                              "error": "nested build refused"}, indent=2))
+        return 1
     # A base report exists before any build step runs, so a failure can still be
     # reported as valid JSON instead of a NameError on an unbound variable.
     report: dict = {"status": "failed", "host": system, "artifacts": []}
+    if args.dry_run:
+        supported = system in ("Windows", "Darwin")
+        report.update(
+            status="ok" if supported else "failed",
+            version=version(),
+            dry_run=True,
+            platform=system.lower(),
+            portable_only=bool(args.portable_only),
+            error=None if supported else f"{system} is not a supported build host",
+        )
+        if not supported:
+            # Same guidance as a real build, so `--dry-run` is a safe way to ask
+            # "can this machine build the installers?" from anywhere.
+            print(
+                f"\n\033[1;31mBUILD FAILED\033[0m\n{system} is not a supported build host. "
+                "PyInstaller does not cross-compile: run this on Windows or macOS, or use the "
+                "release workflow on GitHub Actions (.github/workflows/release.yml).",
+                file=sys.stderr,
+            )
+        if _json_mode:
+            print(json.dumps(report, indent=2))
+        else:
+            print(f"host    : {system} ({'supported' if supported else 'cannot build'})")
+            print(f"version : {report['version']}")
+            print("dry run : nothing was built")
+        return 0 if supported else 1
     try:
         if system == "Windows":
             if args.portable_only:
@@ -414,7 +472,7 @@ def _portable_only_windows(args) -> dict:
     python = sys.executable
     if not args.skip_tests:
         log("Running the test suite")
-        run([python, "-m", "pytest", "tests", "-q"])
+        run([python, "-m", "pytest", "tests", "-q"], env={IN_PROGRESS_ENV: "1"})
     log("Freezing the application")
     run([python, "-m", "PyInstaller", "installers/USBDoctorAI.spec", "--noconfirm", "--clean"])
     bundle = DIST / "USBDoctorAI"

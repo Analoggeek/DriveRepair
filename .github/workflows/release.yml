@@ -79,6 +79,7 @@ jobs:
 
       - name: Build, verify and package
         shell: bash
+        timeout-minutes: 30
         run: |
           set -o pipefail
           python tools/build_release.py --json 2>&1 | tee build-report.log
@@ -87,13 +88,13 @@ jobs:
       # annotations travel over the normal API. Publish the tail of the build log
       # so a failed build says where it stopped instead of only "exit code 1".
       - name: Report the build failure
-        if: failure()
+        if: failure() || cancelled()
         shell: bash
         run: |
           tail -c 2500 build-report.log 2>/dev/null | tr '\n' ' ' | sed 's/^/::error::build log tail: /' || true
 
       - name: Upload the build log on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: windows-build-log
@@ -157,18 +158,19 @@ jobs:
 
       - name: Build, verify and package
         shell: bash
+        timeout-minutes: 30
         run: |
           set -o pipefail
           python tools/build_release.py --json 2>&1 | tee build-report.log
 
       - name: Report the build failure
-        if: failure()
+        if: failure() || cancelled()
         shell: bash
         run: |
           tail -c 2500 build-report.log 2>/dev/null | tr '\n' ' ' | sed 's/^/::error::build log tail: /' || true
 
       - name: Upload the build log on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: macos-build-log-${{ matrix.arch }}

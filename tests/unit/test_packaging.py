@@ -201,7 +201,7 @@ class TestReleaseBuilderOutput:
         import json
         import platform
 
-        result = self._run("--json")
+        result = self._run("--json", "--dry-run")
         assert result.stdout.strip(), "nothing on stdout in --json mode"
         document = json.loads(result.stdout)  # raises if progress logs leaked in
         assert document["host"] == platform.system()
@@ -213,13 +213,13 @@ class TestReleaseBuilderOutput:
 
         if platform.system() in ("Windows", "Darwin"):
             pytest.skip("this host can actually build")
-        result = self._run("--json")
+        result = self._run("--json", "--dry-run")
         assert result.returncode == 1
-        assert "cross-compile" in json.loads(result.stdout)["error"]
+        assert "supported build host" in json.loads(result.stdout)["error"]
         assert "release.yml" in result.stderr
 
     def test_progress_goes_to_stderr_in_json_mode(self):
-        result = self._run("--json")
+        result = self._run("--json", "--dry-run")
         assert "==>" not in result.stdout
 
 
@@ -382,3 +382,66 @@ class TestBuildDeadlines:
     def test_a_hung_frozen_app_explains_itself(self):
         """The message must name the likely cause, not just say 'timed out'."""
         assert "QT_QPA_PLATFORM=offscreen" in self.SOURCE or "dialog" in self.SOURCE
+
+
+class TestBuildRecursion:
+    """A build must never start a build.
+
+    The build runs the test suite, the suite exercises the builder, and on a
+    host that can actually build that is an infinite recursion: each level
+    freezes the app again. On Linux it looked harmless because the builder
+    refuses immediately, which is why this survived until Windows and macOS
+    hung for ninety minutes with no output.
+    """
+
+    SCRIPT = ROOT / "tools/build_release.py"
+
+    def _run(self, *args, env=None):
+        import os
+        import subprocess
+        import sys
+
+        environment = dict(os.environ, **(env or {}))
+        return subprocess.run(
+            [sys.executable, str(self.SCRIPT), *args],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            env=environment,
+        )
+
+    def test_a_nested_build_is_refused(self):
+        import json
+
+        result = self._run("--json", env={"USBDOCTOR_BUILD_IN_PROGRESS": "1"})
+        assert result.returncode == 1
+        document = json.loads(result.stdout)
+        assert document["status"] == "failed"
+        assert "nested build" in document["error"]
+        assert "refusing" in result.stderr.lower()
+
+    def test_dry_run_never_builds_but_still_reports(self):
+        import json
+
+        result = self._run("--json", "--dry-run")
+        document = json.loads(result.stdout)
+        assert document["dry_run"] is True
+        assert document["platform"] in ("linux", "darwin", "windows")
+        assert document["artifacts"] == []
+
+    def test_the_suite_invocation_carries_the_marker(self):
+        source = self.SCRIPT.read_text(encoding="utf-8")
+        assert "IN_PROGRESS_ENV" in source
+        # The builder must refuse unless it is only a dry run.
+        assert 'os.environ.get(IN_PROGRESS_ENV) == "1" and not args.dry_run' in source
+
+    def test_no_test_starts_a_real_build(self):
+        """Regression guard: the suite must only ever ask for a dry run."""
+        for path in (ROOT / "tests").rglob("test_*.py"):
+            text = path.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if 'build_release.py"' in line or 'build_release.py' in line and "self._run" in line:
+                    continue
+            assert "--dry-run" in text or "build_release.py" not in text, (
+                f"{path.name} invokes the builder without --dry-run"
+            )
