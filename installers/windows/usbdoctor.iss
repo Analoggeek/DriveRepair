@@ -68,7 +68,10 @@ Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; F
 ; Optional smartmontools install (official, verified via hash before use).
 Filename: "https://www.smartmontools.org/"; Description: "Open the official smartmontools page (optional, for SMART data)"; Flags: shellexec postinstall unchecked
 ; Prove the installed copy actually runs before the user is told it succeeded.
-Filename: "{app}\{#AppExeName}"; Parameters: "selfcheck"; StatusMsg: "Verifying the installation..."; Flags: runhidden waituntilterminated runascurrentuser; Check: WizardSilent = False
+; skipifsilent, not "Check: WizardSilent = False": the Check parameter is
+; evaluated by Inno's expression evaluator, which rejects "=" ("Invalid symbol '='
+; found") and failed the compile after the whole application had been built.
+Filename: "{app}\{#AppExeName}"; Parameters: "selfcheck"; StatusMsg: "Verifying the installation..."; Flags: runhidden waituntilterminated runascurrentuser skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\docs"
