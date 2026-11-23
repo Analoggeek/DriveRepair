@@ -109,8 +109,12 @@ class TestBuildScripts:
         assert "selfcheck" in source
 
     def test_macos_script_is_valid_shell(self):
+        import os
         import shutil
         import subprocess
+
+        if os.name == "nt":
+            pytest.skip("bash -n on Git Bash cannot read a Windows path; the macOS job checks this")
 
         if not shutil.which("bash"):
             pytest.skip("bash not available")
@@ -201,7 +205,7 @@ class TestReleaseBuilderOutput:
         import json
         import platform
 
-        result = self._run("--json")
+        result = self._run("--json", "--dry-run")
         assert result.stdout.strip(), "nothing on stdout in --json mode"
         document = json.loads(result.stdout)  # raises if progress logs leaked in
         assert document["host"] == platform.system()
@@ -213,13 +217,13 @@ class TestReleaseBuilderOutput:
 
         if platform.system() in ("Windows", "Darwin"):
             pytest.skip("this host can actually build")
-        result = self._run("--json")
+        result = self._run("--json", "--dry-run")
         assert result.returncode == 1
-        assert "cross-compile" in json.loads(result.stdout)["error"]
+        assert "supported build host" in json.loads(result.stdout)["error"]
         assert "release.yml" in result.stderr
 
     def test_progress_goes_to_stderr_in_json_mode(self):
-        result = self._run("--json")
+        result = self._run("--json", "--dry-run")
         assert "==>" not in result.stdout
 
 
@@ -356,3 +360,185 @@ class TestRunnerLabels:
             assert workflow["jobs"][job_name].get("timeout-minutes"), (
                 f"{job_name} has no timeout; a queued job can hang indefinitely"
             )
+
+
+class TestSpecRootResolution:
+    """A spec must find the repo root, not count parents.
+
+    The macOS spec used ``SPECPATH.parent.parent.parent``, one level too many, so
+    the build failed on the machine with ``script '.../launcher.py' not found``.
+    """
+
+    SPECS = [ROOT / "installers/USBDoctorAI.spec", ROOT / "installers/macos/USBDoctorAI.spec"]
+
+    @pytest.mark.parametrize("spec", SPECS, ids=["windows", "macos"])
+    def test_root_is_found_by_searching_for_the_entry_point(self, spec):
+        source = spec.read_text(encoding="utf-8")
+        assert 'while not (ROOT / "launcher.py").exists()' in source, (
+            f"{spec} counts parents instead of finding the repository root"
+        )
+
+    @pytest.mark.parametrize("spec", SPECS, ids=["windows", "macos"])
+    def test_the_resolution_lands_on_the_repository_root(self, spec):
+        """Simulate PyInstaller: SPECPATH is the spec's own directory."""
+        root = spec.parent.resolve()
+        while not (root / "launcher.py").exists() and root.parent != root:
+            root = root.parent
+        assert root == ROOT, f"{spec} resolves to {root}, expected {ROOT}"
+
+
+class TestBuildDeadlines:
+    """Every child process in the build must have a deadline.
+
+    A packaged GUI that opens a dialog never exits, and an unbounded
+    subprocess.run waits with it — which is how a one-hour "build" happens with
+    no output at all.
+    """
+
+    SOURCE = (ROOT / "tools/build_release.py").read_text(encoding="utf-8")
+
+    def test_no_unbounded_subprocess_calls(self):
+        import re
+
+        for match in re.finditer(r"subprocess\.run\((.*?)\)", self.SOURCE, re.S):
+            assert "timeout=" in match.group(1), f"subprocess.run without a timeout:\n{match.group(1)}"
+
+    def test_timeout_errors_are_reported_as_build_failures(self):
+        assert "TimeoutExpired" in self.SOURCE
+        assert "did not finish within" in self.SOURCE or "did not exit within" in self.SOURCE
+
+    def test_a_hung_frozen_app_explains_itself(self):
+        assert "QT_QPA_PLATFORM=offscreen" in self.SOURCE
+
+
+class TestFreezeBudget:
+    """The freeze needs a bigger budget than an ordinary command."""
+
+    SOURCE = (ROOT / "tools/build_release.py").read_text(encoding="utf-8")
+
+    def test_freeze_timeout_is_generous(self):
+        import re
+
+        match = re.search(r"FREEZE_TIMEOUT\s*=\s*([0-9.]+)", self.SOURCE)
+        assert match, "FREEZE_TIMEOUT is not defined"
+        assert float(match.group(1)) >= 1800
+
+    def test_every_pyinstaller_call_uses_it(self):
+        import re
+
+        for match in re.finditer(r"run\(\s*(?:\[|probe_args)(.*?)\)", self.SOURCE, re.S):
+            call = match.group(0)
+            if "PyInstaller" in call or "probe_args" in call:
+                assert "FREEZE_TIMEOUT" in call, f"PyInstaller call without the budget:\n{call[:160]}"
+
+
+class TestBuildRecursion:
+    """A build must never start a build.
+
+    The build runs the suite, the suite exercises the builder, and on a host that
+    can build that is an infinite recursion — which hung Windows and macOS for
+    ninety minutes while Linux, where the builder refuses instantly, stayed green.
+    """
+
+    SCRIPT = ROOT / "tools/build_release.py"
+
+    def _run(self, *args, env=None):
+        import os
+        import subprocess
+        import sys
+
+        return subprocess.run(
+            [sys.executable, str(self.SCRIPT), *args],
+            capture_output=True, text=True, cwd=ROOT,
+            env=dict(os.environ, **(env or {})),
+        )
+
+    def test_a_nested_build_is_refused(self):
+        import json
+
+        result = self._run("--json", env={"USBDOCTOR_BUILD_IN_PROGRESS": "1"})
+        assert result.returncode == 1
+        assert "nested build" in json.loads(result.stdout)["error"]
+        assert "refusing" in result.stderr.lower()
+
+    def test_dry_run_never_builds_but_still_reports(self):
+        import json
+
+        document = json.loads(self._run("--json", "--dry-run").stdout)
+        assert document["dry_run"] is True
+        assert document["artifacts"] == []
+
+    def test_no_test_starts_a_real_build(self):
+        for path in (ROOT / "tests").rglob("test_*.py"):
+            text = path.read_text(encoding="utf-8")
+            if "build_release.py" in text:
+                assert "--dry-run" in text, f"{path.name} invokes the builder without --dry-run"
+
+
+class TestPhaseAnnotations:
+    """A lost log must not lose the progress information."""
+
+    SOURCE = (ROOT / "tools/build_release.py").read_text(encoding="utf-8")
+
+    def test_log_publishes_an_annotation_under_github_actions(self):
+        assert 'GITHUB_ACTIONS' in self.SOURCE
+        assert '::warning title=build phase::' in self.SOURCE
+
+    def test_the_actions_value_is_matched_case_insensitively(self):
+        """GITHUB_ACTIONS is "true", not "1" — comparing to "1" silently disabled this."""
+        import re
+
+        match = re.search(r"os\.environ\.get\(\"GITHUB_ACTIONS\"[^)]*\)([^\n]*)", self.SOURCE)
+        assert match, "the GITHUB_ACTIONS check is missing"
+        assert "lower()" in match.group(1), "the check must accept 'true' as well as '1'"
+
+    def test_annotations_are_flushed(self):
+        import re
+
+        match = re.search(r'print\(f"::warning title=build phase::\{message\}"(.*?)\)', self.SOURCE)
+        assert match and "flush=True" in match.group(1)
+
+
+class TestInstallerScript:
+    """Checks on the Inno Setup script that a compiler failure taught us.
+
+    The Windows build once reached the very last step and then died on
+    ``Check: WizardSilent = False``: the Check parameter is evaluated by Inno's
+    own expression evaluator, which has no "=" operator. A compile is the only
+    real test, and it needs Windows, so guard the rule here instead.
+    """
+
+    SCRIPT = (ROOT / "installers/windows/usbdoctor.iss").read_text(encoding="utf-8")
+
+    def test_no_check_parameter_uses_an_equals_sign(self):
+        import re
+
+        # Comments explain the rule and so contain the very thing it forbids.
+        directives = [
+            line for line in self.SCRIPT.splitlines()
+            if not line.lstrip().startswith(";") and "Check:" in line
+        ]
+        for line in directives:
+            expression = re.search(r"Check:\s*([^;]+)", line).group(1)
+            expression = expression.replace("<>", "").replace(">=", "").replace("<=", "")
+            assert "=" not in expression, (
+                f"Inno's expression evaluator rejects '=': Check: {expression.strip()}"
+            )
+
+    def test_the_selfcheck_entry_runs_only_for_a_watching_user(self):
+        entry = [line for line in self.SCRIPT.splitlines() if 'Parameters: "selfcheck"' in line]
+        assert entry, "the installer no longer verifies the installed copy"
+        assert "skipifsilent" in entry[0]
+
+    def test_the_installer_is_64_bit_only(self):
+        """Raw 64-bit device addressing is the whole product."""
+        assert "ArchitecturesAllowed=x64compatible" in self.SCRIPT
+
+    def test_every_file_the_app_needs_is_checked_after_install(self):
+        code = self.SCRIPT[self.SCRIPT.index("[Code]"):]
+        for required in ("USBDoctorAI.exe", "_internal", "docs"):
+            assert required in code, f"the post-install check does not verify {required}"
+
+    def test_the_build_does_not_depend_on_a_quick_launch_shortcut(self):
+        """It is a Windows 95-era target and it forced an admin-mode warning."""
+        assert "quicklaunch" not in self.SCRIPT.lower()

@@ -90,7 +90,7 @@ class WindowsDeviceProvider:
             number = int(disk.get("Number"))
         except (TypeError, ValueError):
             return None
-        bus = BUS_TYPE.get(int(disk.get("BusType") or 0))
+        bus = BUS_TYPE.get(_enum_code(disk.get("BusType"), BUS_TYPE))
         model = _clean(disk.get("FriendlyName"))
         device = DeviceRef(
             path=f"\\\\.\\PhysicalDrive{number}",
@@ -110,7 +110,7 @@ class WindowsDeviceProvider:
         device.native["msft_disk"] = {
             "number": number,
             "partition_style": disk.get("PartitionStyle"),
-            "media_type": MEDIA_TYPE.get(int(disk.get("MediaType") or 0), "Unknown"),
+            "media_type": MEDIA_TYPE.get(_enum_code(disk.get("MediaType"), MEDIA_TYPE), "Unknown"),
             "operational_status": disk.get("OperationalStatus"),
             "health_status": disk.get("HealthStatus"),
             "unique_id": disk.get("UniqueId"),
@@ -150,7 +150,7 @@ class WindowsDeviceProvider:
         if not device.firmware:
             device.firmware = _clean(data.get("FirmwareRevision"))
         if data.get("BytesPerSector"):
-            device.sector_size = int(data["BytesPerSector"])
+            device.sector_size = _as_int(data.get("BytesPerSector")) or 512
         media = _clean(data.get("MediaType"))
         if media:
             device.native.setdefault("msft_disk", {})["win32_media_type"] = media
@@ -258,7 +258,7 @@ class WindowsDeviceProvider:
         mapping: dict[int, dict[str, Any]] = {}
         for item in data or []:
             try:
-                index = int(item.get("Index"))
+                index = _as_int(item.get("Index")) or 0
             except (TypeError, ValueError):
                 continue
             pnp = _clean(item.get("PNPDeviceID")) or ""
@@ -345,6 +345,31 @@ def storage_reliability(device_path: str) -> Optional[dict[str, Any]]:
         return None
     out = {k: v for k, v in data.items() if v is not None}
     return out or None
+
+
+def _enum_code(value: Any, table: dict[int, Optional[str]]) -> int:
+    """Decode a CIM enum that arrives as an int on some builds and a name on others.
+
+    ``Get-Disk`` returns ``BusType: 17`` on Windows 10 and ``BusType: "NVMe"`` on
+    newer builds. Passing the name to ``int()`` raised
+    ``invalid literal for int() with base 10: 'NVMe'`` and took down enumeration
+    on exactly the machines people are most likely to run this on.
+    """
+    if value is None or isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)  # CIM occasionally hands back 17.0
+    text = str(value).strip()
+    if not text:
+        return 0
+    if text.lstrip("-").isdigit():
+        return int(text)
+    for code, name in table.items():
+        if name and name.lower() == text.lower():
+            return code
+    return 0
 
 
 def _as_int(value: Any) -> Optional[int]:

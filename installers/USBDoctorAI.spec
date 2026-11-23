@@ -17,7 +17,11 @@ tool that must be run as administrator against raw disk devices.
 import sys
 from pathlib import Path
 
-ROOT = Path(SPECPATH).resolve().parent          # noqa: F821 - provided by PyInstaller
+# Walk up to the repository root instead of counting parents: SPECPATH is the
+# spec's own directory, so a moved spec silently becomes a wrong path.
+ROOT = Path(SPECPATH).resolve()                 # noqa: F821 - provided by PyInstaller
+while not (ROOT / "launcher.py").exists() and ROOT.parent != ROOT:
+    ROOT = ROOT.parent
 ASSETS = ROOT / "usbdoctor" / "frontend" / "web"
 
 icon = str(ASSETS / "assets" / "app.ico")
