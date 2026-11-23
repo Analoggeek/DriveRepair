@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usbdoctor-ai"
+version = "1.0.0"
+description = "USB Doctor AI — intelligent storage diagnosis, repair and recovery suite"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Proprietary" }
+authors = [{ name = "USB Doctor AI" }]
+keywords = ["usb", "storage", "diagnostics", "data-recovery", "usb-drive", "smart"]
+classifiers = [
+    "Environment :: X11 Applications :: Qt",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = []
+
+[project.optional-dependencies]
+# The engine, the web interface and the CLI run on the standard library alone.
+desktop = ["PySide6-Essentials>=6.5"]
+dev = ["pytest>=7.4", "pytest-timeout>=2.1", "ruff>=0.1", "mypy>=1.6", "build>=1.0"]
+package = ["pyinstaller>=6.0", "Pillow>=10.0"]
+
+[project.scripts]
+usbdoctor = "usbdoctor.cli:main"
+usbdoctor-gui = "usbdoctor.app.main:main"
+
+[project.urls]
+Homepage = "https://github.com/Analoggeek/DriveRepair"
+Documentation = "https://github.com/Analoggeek/DriveRepair/tree/main/docs"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["usbdoctor*"]
+
+[tool.setuptools.package-data]
+usbdoctor = [
+    "frontend/web/*.html",
+    "frontend/web/*.css",
+    "frontend/web/*.js",
+    "frontend/web/assets/*",
+    "knowledge/*.json",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",   # long lines are handled by the formatter
+    "B008",   # dataclass field defaults are intentional
+    "RUF001", # unicode punctuation is deliberate (•, ✓, —)
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "N806"]
+"usbdoctor/app/pages/*" = ["N802"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_unused_ignores = false
+ignore_missing_imports = true
+exclude = "(build|dist|tests)/"
