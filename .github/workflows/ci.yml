@@ -64,6 +64,7 @@ jobs:
         run: |
           set -o pipefail
           python -m pytest tests -q --tb=short -ra \
+            --timeout=180 --timeout-method=thread \
             --junitxml=junit.xml 2>&1 | tee pytest.log
 
       # Job logs live on a storage host that is not always reachable, but
@@ -107,6 +108,7 @@ jobs:
         run: |
           set -o pipefail
           python -m pytest tests -q --tb=short -ra \
+            --timeout=180 --timeout-method=thread \
             --junitxml=junit-ui.xml 2>&1 | tee pytest-ui.log
 
       - name: Report UI failures

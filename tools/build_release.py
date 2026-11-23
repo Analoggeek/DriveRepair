@@ -68,6 +68,17 @@ IN_PROGRESS_ENV = "USBDOCTOR_BUILD_IN_PROGRESS"
 # A freeze is the slowest step and the one most affected by the build machine.
 FREEZE_TIMEOUT = 2400.0
 
+# Per-test deadlines. Without them a single wedged test on one platform turns
+# into an opaque build timeout with no indication of which test did it;
+# `--timeout-method=thread` dumps the stacks of every thread, which names it.
+def pytest_guard() -> list[str]:
+    """Per-test deadlines, when the plugin is available."""
+    try:
+        import pytest_timeout  # noqa: F401
+    except ModuleNotFoundError:
+        return []
+    return ["--timeout=180", "--timeout-method=thread"]
+
 
 def run(
     args: list[str],
@@ -218,7 +229,7 @@ def build_windows(args) -> dict:
 
     log("Running the test suite")
     if not args.skip_tests:
-        run([python, "-m", "pytest", "tests", "-q"], env={IN_PROGRESS_ENV: "1"})
+        run([python, "-m", "pytest", "tests", "-q", *pytest_guard()], env={IN_PROGRESS_ENV: "1"})
 
     log("Generating icons")
     run([python, "tools/make_icons.py"], check=False)  # Qt may be missing a display
@@ -306,7 +317,7 @@ def build_macos(args) -> dict:
 
     log("Running the test suite")
     if not args.skip_tests:
-        run([python, "-m", "pytest", "tests", "-q"], env={IN_PROGRESS_ENV: "1"})
+        run([python, "-m", "pytest", "tests", "-q", *pytest_guard()], env={IN_PROGRESS_ENV: "1"})
 
     log("Generating icons")
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
@@ -485,7 +496,7 @@ def _portable_only_windows(args) -> dict:
     python = sys.executable
     if not args.skip_tests:
         log("Running the test suite")
-        run([python, "-m", "pytest", "tests", "-q"], env={IN_PROGRESS_ENV: "1"})
+        run([python, "-m", "pytest", "tests", "-q", *pytest_guard()], env={IN_PROGRESS_ENV: "1"})
     log("Freezing the application")
     # Antivirus scanning thousands of Qt files makes a cold Windows freeze slow;
     # 15 minutes is not a hang, it is a Windows runner doing its job.

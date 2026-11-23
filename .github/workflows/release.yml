@@ -84,8 +84,17 @@ jobs:
         shell: bash
         timeout-minutes: 60
         run: |
-          set -o pipefail
-          python -u tools/build_release.py --json 2>&1 | tee build-report.log
+          # No pipe: on Windows the tee pipeline left an empty log, which is the
+          # one thing a failed build cannot afford. Redirect, then report the
+          # tail from the same step so the annotation cannot be lost either.
+          if python -u tools/build_release.py --json > build-report.log 2>&1; then
+            tail -c 1200 build-report.log
+          else
+            status=$?
+            echo "::error::build failed with exit $status"
+            tail -c 2500 build-report.log | tr '\n' ' ' | sed 's/^/::error::build log tail: /'
+            exit "$status"
+          fi
 
       # Job logs are served from storage that is not always reachable, while
       # annotations travel over the normal API. Publish the tail of the build log
@@ -163,8 +172,17 @@ jobs:
         shell: bash
         timeout-minutes: 60
         run: |
-          set -o pipefail
-          python -u tools/build_release.py --json 2>&1 | tee build-report.log
+          # No pipe: on Windows the tee pipeline left an empty log, which is the
+          # one thing a failed build cannot afford. Redirect, then report the
+          # tail from the same step so the annotation cannot be lost either.
+          if python -u tools/build_release.py --json > build-report.log 2>&1; then
+            tail -c 1200 build-report.log
+          else
+            status=$?
+            echo "::error::build failed with exit $status"
+            tail -c 2500 build-report.log | tr '\n' ' ' | sed 's/^/::error::build log tail: /'
+            exit "$status"
+          fi
 
       - name: Report the build failure
         if: failure() || cancelled()
