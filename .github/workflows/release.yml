@@ -81,7 +81,27 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python tools/build_release.py --json | tee build-report.json
+          python tools/build_release.py --json 2>&1 | tee build-report.log
+
+      # Job logs are served from storage that is not always reachable, while
+      # annotations travel over the normal API. Publish the tail of the build log
+      # so a failed build says where it stopped instead of only "exit code 1".
+      - name: Report the build failure
+        if: failure()
+        shell: bash
+        run: |
+          tail -c 2500 build-report.log 2>/dev/null | tr '\n' ' ' | sed 's/^/::error::build log tail: /' || true
+
+      - name: Upload the build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-log
+          path: |
+            build-report.log
+            dist/**
+          if-no-files-found: ignore
+          retention-days: 5
 
       - name: Upload the offline installer
         uses: actions/upload-artifact@v4
@@ -139,7 +159,24 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python tools/build_release.py --json | tee build-report.json
+          python tools/build_release.py --json 2>&1 | tee build-report.log
+
+      - name: Report the build failure
+        if: failure()
+        shell: bash
+        run: |
+          tail -c 2500 build-report.log 2>/dev/null | tr '\n' ' ' | sed 's/^/::error::build log tail: /' || true
+
+      - name: Upload the build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-log-${{ matrix.arch }}
+          path: |
+            build-report.log
+            dist/**
+          if-no-files-found: ignore
+          retention-days: 5
 
       - name: Report the bundle architecture
         run: |
