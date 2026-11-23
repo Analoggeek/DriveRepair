@@ -91,7 +91,7 @@ jobs:
           set -o pipefail
           python -m pytest tests -q --tb=short -ra \
             --timeout=180 --timeout-method=thread \
-            --junitxml=junit-build.xml 2>&1 | tee pytest-build.log
+            --junitxml=junit-build.xml --durations=15 2>&1 | tee pytest-build.log
 
       - name: Report test failures
         if: failure()
@@ -201,7 +201,7 @@ jobs:
           set -o pipefail
           python -m pytest tests -q --tb=short -ra \
             --timeout=180 --timeout-method=thread \
-            --junitxml=junit-build.xml 2>&1 | tee pytest-build.log
+            --junitxml=junit-build.xml --durations=15 2>&1 | tee pytest-build.log
 
       - name: Report test failures
         if: failure()

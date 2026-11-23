@@ -109,8 +109,12 @@ class TestBuildScripts:
         assert "selfcheck" in source
 
     def test_macos_script_is_valid_shell(self):
+        import os
         import shutil
         import subprocess
+
+        if os.name == "nt":
+            pytest.skip("bash -n on Git Bash cannot read a Windows path; the macOS job checks this")
 
         if not shutil.which("bash"):
             pytest.skip("bash not available")
