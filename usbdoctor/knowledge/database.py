@@ -71,8 +71,13 @@ class KnowledgeEntry:
         """Score relevance (0 = no match). Higher is more specific."""
         score = 0
         codes = {c.upper() for c in error_codes}
-        if codes & {c.upper() for c in self.error_codes}:
-            score += 40
+        matched_codes = codes & {c.upper() for c in self.error_codes}
+        if matched_codes:
+            # Weight by how *specific* the entry is: an entry that names one
+            # exact code is stronger evidence than an umbrella entry that lists
+            # a dozen codes "just in case".
+            breadth = max(1, len(self.error_codes))
+            score += round(40 * len(matched_codes) / breadth) + 10
         if filesystem and filesystem.lower() in [f.lower() for f in self.filesystems]:
             score += 15
         if brand and brand.lower() in [b.lower() for b in self.brands]:
@@ -333,6 +338,88 @@ ENTRIES: tuple[KnowledgeEntry, ...] = (
         severity="error",
         error_codes=["MBR_NO_PARTITIONS", "VOLUME_START_MISMATCH"],
         sources=["https://www.cgsecurity.org/wiki/TestDisk_Step_By_Step"],
+    ),
+    # ------------------------------------------------------------- surface
+    KnowledgeEntry(
+        key="unreadable-sectors",
+        title="Unreadable sectors spread across the drive",
+        symptoms=["scan slows down and speeds up abruptly", "files fail to copy with I/O errors",
+                  "drive clicks or stutters during reads"],
+        likely_causes=[
+            "Worn NAND cells or bad blocks the controller can no longer hide",
+            "Physical damage from a drop, heat or a power surge",
+        ],
+        software_fixable=False,
+        steps=[
+            "Stop using the drive normally — each retry stresses failing cells further.",
+            "Create a full image with retries and skip-ahead (Data Recovery → Image device).",
+            "Work only from the image afterwards; recover files from it, never from the drive.",
+            "Replace the drive. Software cannot restore physically damaged storage.",
+        ],
+        verification=["The image completes with a small, finite error count"],
+        severity="critical",
+        error_codes=["SURFACE_READ_ERRORS", "SURFACE_READ_ERRORS_CONFIRMED", "SECTOR_ZERO_UNREADABLE"],
+        sources=["https://www.cgsecurity.org/wiki/Damaged_Hard_Disk"],
+    ),
+    KnowledgeEntry(
+        key="filesystem-metadata",
+        title="File-system metadata damaged but files intact",
+        symptoms=["directory listing is empty or garbled", "file names show as ????",
+                  "some folders refuse to open"],
+        likely_causes=["Interrupted write to the FAT/directory area", "unsafe ejection during a copy"],
+        software_fixable=True,
+        steps=[
+            "Image the device first, then work on the image.",
+            "Rebuild the metadata from the backup copy if one is present.",
+            "If the directory still cannot be trusted, recover files by content carving.",
+        ],
+        verification=["Directory listing shows the original names and sizes"],
+        severity="warning",
+        error_codes=["FILESYSTEM_METADATA_DAMAGED", "FAT_COPIES_DIFFER", "FAT32_FSINFO_INVALID"],
+        sources=["https://learn.microsoft.com/windows/win32/fileio/fat32-file-system-specification"],
+    ),
+    KnowledgeEntry(
+        key="zero-capacity",
+        title="Drive enumerates but reports zero capacity",
+        symptoms=["device appears in Device Manager / System Information",
+                  "shows 0 bytes in every OS", "cannot be formatted"],
+        likely_causes=[
+            "Controller firmware crashed and did not initialise the flash translation layer",
+            "NAND chip no longer answers the controller (dead chip or lifted solder joint)",
+        ],
+        software_fixable=False,
+        steps=[
+            "Test in a different port and machine to rule out a hub or cable fault.",
+            "This is a hardware-level failure. Only a controller-specific manufacturing tool "
+            "can reinitialise it, and it erases all data — recover first if possible.",
+            "If the data matters, stop here and consult a professional recovery service.",
+        ],
+        verification=["The drive reports its normal capacity again"],
+        severity="critical",
+        error_codes=["ZERO_CAPACITY", "ZERO_WHILE_REPORTING_CAPACITY"],
+        when_not_to=[
+            "Never reflash firmware to chase a zero-capacity fault unless the exact model, "
+            "controller revision and tool version are confirmed — a wrong flash makes it worse.",
+        ],
+        sources=["https://www.smartmontools.org/wiki/FAQ"],
+    ),
+    KnowledgeEntry(
+        key="ntfs-mft-damage",
+        title="NTFS master file table (MFT) damaged",
+        symptoms=["volume mounts but file names are unreadable", "chkdsk reports MFT errors",
+                  "folders appear as 'File or directory is corrupted'"],
+        likely_causes=["Unsafe removal during a metadata write", "bad sectors in the MFT area"],
+        software_fixable=True,
+        steps=[
+            "Image the volume and recover files from the image first.",
+            "Let Windows run chkdsk /f only after the files you need are copied out.",
+            "If the MFT itself is unreadable, recover by content carving instead of repairing.",
+        ],
+        verification=["chkdsk completes with no MFT errors", "File names list correctly"],
+        severity="error",
+        filesystems=["ntfs"],
+        error_codes=["NTFS_MFT_DAMAGED", "NTFS_DIRTY"],
+        sources=["https://learn.microsoft.com/windows-server/administration/windows-commands/chkdsk"],
     ),
     # ----------------------------------------------------- connection/power
     KnowledgeEntry(

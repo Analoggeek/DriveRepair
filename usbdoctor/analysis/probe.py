@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from usbdoctor.core.errors import MediaReadError
+from usbdoctor.core.io import MediaReadError
 from usbdoctor.core.io import DiskReader
 from usbdoctor.core.platform import detect_system
 from usbdoctor.core.util import human_size

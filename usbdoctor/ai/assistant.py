@@ -235,7 +235,10 @@ class DiagnosticAssistant:
 
         # 2. Hardware vs software decision ------------------------------------
         hardware_only = bool(health and health.permanent_failure_suspected)
-        low_risk_plans = [p for p in plans if p.risk in (Risk.NONE, Risk.LOW)]
+        low_risk_plans = sorted(
+            (p for p in plans if p.risk in (Risk.NONE, Risk.LOW)),
+            key=lambda p: _RISK_ORDER[p.risk],
+        )
         repairable_metadata = any(
             c in codes
             for c in (
