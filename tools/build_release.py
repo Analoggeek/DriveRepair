@@ -49,21 +49,64 @@ class BuildError(RuntimeError):
 # `build_release.py --json > report.json` would get a file it cannot parse.
 _json_mode = False
 
+# Set for every child process the build starts. A nested build refuses to run:
+# the build runs the test suite, and the suite exercises this tool, so without a
+# marker one build spawns another, which spawns another, forever. That recursion
+# is what hung the Windows and macOS installer jobs for ninety minutes.
+IN_PROGRESS_ENV = "USBDOCTOR_BUILD_IN_PROGRESS"
+
+# A freeze is the slowest step and the one most affected by the build machine.
+FREEZE_TIMEOUT = 2400.0
+
+
+def pytest_guard() -> list[str]:
+    """Per-test deadlines, when the plugin is available."""
+    try:
+        import pytest_timeout  # noqa: F401
+    except ModuleNotFoundError:
+        return []
+    return ["--timeout=180", "--timeout-method=thread"]
+
 
 def _echo(message: str) -> None:
-    print(message, file=sys.stderr if _json_mode else sys.stdout)
+    # flush: when a build is killed for hanging, a buffered log is an empty log
+    # and there is nothing left to diagnose.
+    print(message, file=sys.stderr if _json_mode else sys.stdout, flush=True)
 
 
 def log(message: str) -> None:
     _echo(f"\n\033[1;36m==> {message}\033[0m" if sys.stdout.isatty() else f"\n==> {message}")
+    # Also publish the phase as a GitHub annotation: annotations travel separately
+    # from the captured output, so a build whose log is lost still shows how far
+    # it got.
+    if os.environ.get("GITHUB_ACTIONS", "").lower() in ("1", "true"):
+        print(f"::warning title=build phase::{message}", flush=True)
 
 
-def run(args: list[str], *, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
+def run(
+    args: list[str],
+    *,
+    check: bool = True,
+    capture: bool = False,
+    timeout: float = 900,
+    env: dict | None = None,
+) -> subprocess.CompletedProcess:
     printable = " ".join(args)
     _echo(f"    $ {printable}")
-    result = subprocess.run(
-        args, cwd=ROOT, text=True, capture_output=capture, check=False
-    )
+    try:
+        result = subprocess.run(
+            args,
+            cwd=ROOT,
+            text=True,
+            capture_output=capture,
+            check=False,
+            timeout=timeout,
+            env={**os.environ, **(env or {}), IN_PROGRESS_ENV: "1"},
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Without this, a wedged child made the whole build hang silently until
+        # the CI job's own timeout killed the runner.
+        raise BuildError(f"command did not finish within {timeout:.0f}s: {printable}") from exc
     if check and result.returncode != 0:
         detail = (result.stdout or "") + (result.stderr or "")
         raise BuildError(f"command failed ({result.returncode}): {printable}\n{detail[-4000:]}")
@@ -82,6 +125,23 @@ def version() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _run_frozen(argv: list[str], *, env: dict, label: str, timeout: float = 300):
+    """Run the frozen product with a hard deadline.
+
+    A packaged GUI is the one thing in this pipeline that can wedge without
+    printing anything: a modal dialog waits forever with nobody to dismiss it,
+    and a captured subprocess call waits with it.
+    """
+    try:
+        return subprocess.run(argv, env=env, text=True, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise BuildError(
+            f"{label} did not exit within {timeout:.0f}s while running `{' '.join(argv[1:])}`. "
+            "A packaged GUI that opens a dialog or waits for an event loop never exits on a "
+            "headless machine; check that QT_QPA_PLATFORM=offscreen reaches it."
+        ) from exc
+
+
 def verify_install(executable: Path, *, label: str, windowed: bool) -> dict:
     """Run the packaged self-check inside the frozen product.
 
@@ -95,9 +155,7 @@ def verify_install(executable: Path, *, label: str, windowed: bool) -> dict:
 
     if windowed:
         print(f"    checking {label} (exit code only)")
-        result = subprocess.run(
-            [str(executable), "selfcheck"], env=env, text=True, capture_output=True
-        )
+        result = _run_frozen([str(executable), "selfcheck"], env=env, label=label)
         if result.returncode != 0:
             raise BuildError(
                 f"{label} failed its self-check (exit {result.returncode}).\n"
@@ -106,9 +164,7 @@ def verify_install(executable: Path, *, label: str, windowed: bool) -> dict:
         return {"ok": True, "checks": []}
 
     print(f"    checking {label}")
-    result = subprocess.run(
-        [str(executable), "selfcheck", "--json"], env=env, text=True, capture_output=True
-    )
+    result = _run_frozen([str(executable), "selfcheck", "--json"], env=env, label=label)
     payload: dict | None = None
     try:
         payload = json.loads(result.stdout[result.stdout.index("{"):])
@@ -172,7 +228,7 @@ def build_windows(args) -> dict:
 
     log("Running the test suite")
     if not args.skip_tests:
-        run([python, "-m", "pytest", "tests", "-q"])
+        run([python, "-m", "pytest", "tests", "-q", *pytest_guard()], env={IN_PROGRESS_ENV: "1"})
 
     log("Generating icons")
     run([python, "tools/make_icons.py"], check=False)  # Qt may be missing a display
@@ -181,7 +237,12 @@ def build_windows(args) -> dict:
     for stale in ("build", "dist"):
         if (ROOT / stale).exists():
             shutil.rmtree(ROOT / stale)
-    run([python, "-m", "PyInstaller", "installers/USBDoctorAI.spec", "--noconfirm", "--clean"])
+    # Antivirus scanning thousands of Qt files makes a cold Windows freeze slow;
+    # fifteen minutes is not a hang, it is a Windows runner doing its job.
+    run(
+        [python, "-m", "PyInstaller", "installers/USBDoctorAI.spec", "--noconfirm", "--clean"],
+        timeout=FREEZE_TIMEOUT,
+    )
 
     bundle = DIST / "USBDoctorAI"
     exe = bundle / "USBDoctorAI.exe"
@@ -206,7 +267,7 @@ def build_windows(args) -> dict:
         ("usbdoctor/frontend/web/assets", "usbdoctor/frontend/web/assets"),
     ):
         probe_args += ["--add-data", f"{source};{dest}"]
-    run(probe_args)
+    run(probe_args, timeout=FREEZE_TIMEOUT)
     probe = probe_dir / "USBDoctorAIConsole.exe"
     if not probe.exists():
         raise BuildError("the console probe was not produced")
@@ -255,17 +316,25 @@ def build_macos(args) -> dict:
 
     log("Running the test suite")
     if not args.skip_tests:
-        run([python, "-m", "pytest", "tests", "-q"])
+        run([python, "-m", "pytest", "tests", "-q", *pytest_guard()], env={IN_PROGRESS_ENV: "1"})
 
     log("Generating icons")
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
-    subprocess.run([python, "tools/make_icons.py"], cwd=ROOT, env=env, check=False)
+    try:
+        subprocess.run(
+            [python, "tools/make_icons.py"], cwd=ROOT, env=env, check=False, timeout=180
+        )
+    except subprocess.TimeoutExpired:
+        raise BuildError("icon generation did not finish within 180s") from None
 
     log("Freezing the application bundle")
     for stale in ("build", "dist"):
         if (ROOT / stale).exists():
             shutil.rmtree(ROOT / stale)
-    run([python, "-m", "PyInstaller", "installers/macos/USBDoctorAI.spec", "--noconfirm", "--clean"])
+    run(
+        [python, "-m", "PyInstaller", "installers/macos/USBDoctorAI.spec", "--noconfirm", "--clean"],
+        timeout=FREEZE_TIMEOUT,
+    )
 
     app = DIST / "USBDoctorAI.app"
     binary = app / "Contents" / "MacOS" / "USBDoctorAI"
@@ -318,6 +387,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--portable-only", action="store_true",
                         help="skip the OS installer and produce only the portable zip")
     parser.add_argument("--json", action="store_true", help="print a machine-readable summary")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="check the host and report what would be built, without building anything",
+    )
     args = parser.parse_args(argv)
 
     global _json_mode
@@ -325,9 +399,48 @@ def main(argv: list[str] | None = None) -> int:
 
     started = time.time()
     system = platform.system()
+
+    # Refuse to nest. The build runs the test suite; the suite exercises this
+    # tool; without this, a build-capable host calls itself, then itself again,
+    # until the job hangs or the runner dies.
+    if os.environ.get(IN_PROGRESS_ENV) == "1" and not args.dry_run:
+        print(
+            f"\n\033[1;31mBUILD FAILED\033[0m\nrefusing to start a build inside a build "
+            f"({IN_PROGRESS_ENV}=1). Use --dry-run from tests.",
+            file=sys.stderr,
+        )
+        if _json_mode:
+            print(json.dumps({"status": "failed", "host": system, "artifacts": [],
+                              "error": "nested build refused"}, indent=2))
+        return 1
+
     # A base report exists before any build step runs, so a failure can still be
     # reported as valid JSON instead of a NameError on an unbound variable.
     report: dict = {"status": "failed", "host": system, "artifacts": []}
+    if args.dry_run:
+        supported = system in ("Windows", "Darwin")
+        report.update(
+            status="ok" if supported else "failed",
+            version=version(),
+            dry_run=True,
+            platform=system.lower(),
+            portable_only=bool(args.portable_only),
+            error=None if supported else f"{system} is not a supported build host",
+        )
+        if not supported:
+            print(
+                f"\n\033[1;31mBUILD FAILED\033[0m\n{system} is not a supported build host. "
+                "PyInstaller does not cross-compile: run this on Windows or macOS, or use the "
+                "release workflow on GitHub Actions (.github/workflows/release.yml).",
+                file=sys.stderr,
+            )
+        if _json_mode:
+            print(json.dumps(report, indent=2))
+        else:
+            print(f"host    : {system} ({'supported' if supported else 'cannot build'})")
+            print(f"version : {report['version']}")
+            print("dry run : nothing was built")
+        return 0 if supported else 1
     try:
         if system == "Windows":
             if args.portable_only:
@@ -381,9 +494,14 @@ def _portable_only_windows(args) -> dict:
     python = sys.executable
     if not args.skip_tests:
         log("Running the test suite")
-        run([python, "-m", "pytest", "tests", "-q"])
+        run([python, "-m", "pytest", "tests", "-q", *pytest_guard()], env={IN_PROGRESS_ENV: "1"})
     log("Freezing the application")
-    run([python, "-m", "PyInstaller", "installers/USBDoctorAI.spec", "--noconfirm", "--clean"])
+    # Antivirus scanning thousands of Qt files makes a cold Windows freeze slow;
+    # fifteen minutes is not a hang, it is a Windows runner doing its job.
+    run(
+        [python, "-m", "PyInstaller", "installers/USBDoctorAI.spec", "--noconfirm", "--clean"],
+        timeout=FREEZE_TIMEOUT,
+    )
     bundle = DIST / "USBDoctorAI"
     if not (bundle / "USBDoctorAI.exe").exists():
         raise BuildError("PyInstaller did not produce the portable folder")

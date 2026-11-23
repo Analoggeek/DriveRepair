@@ -23,6 +23,9 @@ permissions:
 env:
   PYTHON_VERSION: "3.11"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # A build that hangs is killed; without this its output dies in the buffer and
+  # the log needed for diagnosis is empty.
+  PYTHONUNBUFFERED: "1"
 
 jobs:
   test:
@@ -77,28 +80,60 @@ jobs:
           choco install innosetup --yes --no-progress
           echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
 
-      - name: Build, verify and package
+      # The suite is its own step, so the step's *name* localises a failure even
+      # when the captured log does not survive the runner.
+      - name: Run the test suite
         shell: bash
+        timeout-minutes: 30
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
           set -o pipefail
-          python tools/build_release.py --json 2>&1 | tee build-report.log
+          python -m pytest tests -q --tb=short -ra \
+            --timeout=180 --timeout-method=thread \
+            --junitxml=junit-build.xml 2>&1 | tee pytest-build.log
+
+      - name: Report test failures
+        if: failure()
+        shell: bash
+        run: python .github/scripts/report_failures.py junit-build.xml pytest-build.log || true
+
+      - name: Freeze, verify and package
+        shell: bash
+        timeout-minutes: 60
+        run: |
+          # No pipe: the tee pipeline left an empty log on Windows, which is the
+          # one thing a failed build cannot afford. Redirect, then report from
+          # inside this step so the annotation cannot be lost either.
+          if python -u tools/build_release.py --json --skip-tests > build-report.log 2>&1; then
+            tail -c 1200 build-report.log
+          else
+            status=$?
+            echo "::error::packaging failed with exit $status"
+            grep -a '^::warning' build-report.log | tail -8 || true
+            grep -a '==>' build-report.log | tail -6 | tr '\n' ';' | sed 's/^/::error::phases reached: /' || true
+            tail -c 2000 build-report.log | tr '\n' ' ' | sed 's/^/::error::tail: /' || true
+            exit "$status"
+          fi
 
       # Job logs are served from storage that is not always reachable, while
       # annotations travel over the normal API. Publish the tail of the build log
       # so a failed build says where it stopped instead of only "exit code 1".
       - name: Report the build failure
-        if: failure()
+        if: failure() || cancelled()
         shell: bash
         run: |
           tail -c 2500 build-report.log 2>/dev/null | tr '\n' ' ' | sed 's/^/::error::build log tail: /' || true
 
       - name: Upload the build log on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: windows-build-log
           path: |
             build-report.log
+            pytest-build.log
+            junit-build.xml
             dist/**
           if-no-files-found: ignore
           retention-days: 5
@@ -144,6 +179,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # A stalled queue must become a red run, not a permanently pending one.
     timeout-minutes: 90
+    # A stalled queue must become a red run, not a permanently pending one.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -155,25 +192,57 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[desktop,package,dev]"
 
-      - name: Build, verify and package
+      # The suite is its own step, so the step's *name* localises a failure even
+      # when the captured log does not survive the runner.
+      - name: Run the test suite
         shell: bash
+        timeout-minutes: 30
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
           set -o pipefail
-          python tools/build_release.py --json 2>&1 | tee build-report.log
+          python -m pytest tests -q --tb=short -ra \
+            --timeout=180 --timeout-method=thread \
+            --junitxml=junit-build.xml 2>&1 | tee pytest-build.log
+
+      - name: Report test failures
+        if: failure()
+        shell: bash
+        run: python .github/scripts/report_failures.py junit-build.xml pytest-build.log || true
+
+      - name: Freeze, verify and package
+        shell: bash
+        timeout-minutes: 60
+        run: |
+          # No pipe: the tee pipeline left an empty log on Windows, which is the
+          # one thing a failed build cannot afford. Redirect, then report from
+          # inside this step so the annotation cannot be lost either.
+          if python -u tools/build_release.py --json --skip-tests > build-report.log 2>&1; then
+            tail -c 1200 build-report.log
+          else
+            status=$?
+            echo "::error::packaging failed with exit $status"
+            grep -a '^::warning' build-report.log | tail -8 || true
+            grep -a '==>' build-report.log | tail -6 | tr '\n' ';' | sed 's/^/::error::phases reached: /' || true
+            tail -c 2000 build-report.log | tr '\n' ' ' | sed 's/^/::error::tail: /' || true
+            exit "$status"
+          fi
 
       - name: Report the build failure
-        if: failure()
+        if: failure() || cancelled()
         shell: bash
         run: |
           tail -c 2500 build-report.log 2>/dev/null | tr '\n' ' ' | sed 's/^/::error::build log tail: /' || true
 
       - name: Upload the build log on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: macos-build-log-${{ matrix.arch }}
           path: |
             build-report.log
+            pytest-build.log
+            junit-build.xml
             dist/**
           if-no-files-found: ignore
           retention-days: 5
