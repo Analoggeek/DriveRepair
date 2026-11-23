@@ -61,6 +61,8 @@ jobs:
     name: Windows installer
     needs: test
     runs-on: windows-latest
+    env:
+      CHECKSUM_FILE: SHA256SUMS-windows-x64.txt
     # A stalled queue must become a red run, not a permanently pending one.
     timeout-minutes: 90
     steps:
@@ -136,6 +138,30 @@ jobs:
           if-no-files-found: ignore
           retention-days: 5
 
+      # The product is offline, so the download cannot be repaired by a re-fetch:
+      # publish the sizes and the hashes the user can check against the file they
+      # end up with.
+      - name: Record sizes and checksums
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, os, pathlib
+          lines, notes = [], []
+          for path in sorted(pathlib.Path("dist").glob("USBDoctorAI-*")):
+              if path.suffix not in {".exe", ".dmg", ".zip"}:
+                  continue
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              line = f"{digest}  {path.name}"
+              lines.append(line)
+              notes.append(f"{path.name}  {path.stat().st_size:,} bytes  sha256 {digest}")
+          name = os.environ.get("CHECKSUM_FILE", "SHA256SUMS.txt")
+          pathlib.Path("dist", name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+          for note in notes:
+              print(f"::notice title=artifact::{note}")
+          if not lines:
+              raise SystemExit("no distributable files were produced")
+          PY
+
       - name: Upload the offline installer
         uses: actions/upload-artifact@v4
         with:
@@ -143,6 +169,7 @@ jobs:
           path: |
             dist/USBDoctorAI-Setup-*.exe
             dist/USBDoctorAI-*-portable.zip
+            dist/SHA256SUMS*.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -153,6 +180,7 @@ jobs:
           files: |
             dist/USBDoctorAI-Setup-*.exe
             dist/USBDoctorAI-*-portable.zip
+            dist/SHA256SUMS*.txt
           fail_on_unmatched_files: true
 
   macos:
@@ -177,6 +205,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # A stalled queue must become a red run, not a permanently pending one.
     timeout-minutes: 90
+    env:
+      # One file per platform: three jobs writing the same name on one release
+      # means the last writer silently wins.
+      CHECKSUM_FILE: SHA256SUMS-macos-${{ matrix.arch }}.txt
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -248,6 +280,30 @@ jobs:
           lipo -archs "dist/USBDoctorAI.app/Contents/MacOS/USBDoctorAI" || true
           ls -lh dist
 
+      # The product is offline, so the download cannot be repaired by a re-fetch:
+      # publish the sizes and the hashes the user can check against the file they
+      # end up with.
+      - name: Record sizes and checksums
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, os, pathlib
+          lines, notes = [], []
+          for path in sorted(pathlib.Path("dist").glob("USBDoctorAI-*")):
+              if path.suffix not in {".exe", ".dmg", ".zip"}:
+                  continue
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              line = f"{digest}  {path.name}"
+              lines.append(line)
+              notes.append(f"{path.name}  {path.stat().st_size:,} bytes  sha256 {digest}")
+          name = os.environ.get("CHECKSUM_FILE", "SHA256SUMS.txt")
+          pathlib.Path("dist", name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+          for note in notes:
+              print(f"::notice title=artifact::{note}")
+          if not lines:
+              raise SystemExit("no distributable files were produced")
+          PY
+
       - name: Upload the offline disk image
         uses: actions/upload-artifact@v4
         with:
@@ -255,6 +311,7 @@ jobs:
           path: |
             dist/USBDoctorAI-*.dmg
             dist/USBDoctorAI-*-portable.zip
+            dist/SHA256SUMS*.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -265,4 +322,5 @@ jobs:
           files: |
             dist/USBDoctorAI-*-${{ matrix.arch }}.dmg
             dist/USBDoctorAI-*-${{ matrix.arch }}-portable.zip
+            dist/SHA256SUMS-macos-${{ matrix.arch }}.txt
           fail_on_unmatched_files: true
