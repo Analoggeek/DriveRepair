@@ -35,13 +35,18 @@ power cut, or a bad unmount. It does not and cannot rebuild data that is physica
 | USB flash drive, FAT32/exFAT (most sticks) | yes | **yes** — boot region, FSInfo, FAT mirror | yes, incl. deleted files |
 | USB flash drive, NTFS | yes | **yes** — boot sector from backup | carving only |
 | Memory card (SD/microSD), FAT32/exFAT | yes | **yes** | yes, incl. deleted files |
-| External HDD/SSD, NTFS/FAT/exFAT | yes | **yes** | yes (FAT/exFAT), carving (NTFS) |
+| External/internal HDD/SSD, NTFS/FAT/exFAT | yes | **yes** — repairs target the volume, so the partition table is never touched | yes (FAT/exFAT), carving (NTFS) |
 | External HDD/SSD, ext2/3/4 | yes | **no** — routed to `fsck` (`native-repair`) | carving only |
 | External drive, APFS / HFS+ | yes | **no** — routed to `diskutil repairVolume` (macOS) | carving only |
 | Windows/Linux boot disk, any layout | yes | **refused by policy** (system disk) | yes |
 | Any device with confirmed media damage | yes | **no repair offered** — advises replacement and recovery only | yes |
 | Counterfeit (fake-capacity) drive | yes | **no** — capacity is a lie; only recovery helps | yes |
 | Dead controller / drive not enumerating | **no** — the OS cannot see it | no | no |
+
+Repairs are applied **inside the volume that was diagnosed**, never at LBA 0. A disk with a
+partition table keeps that table byte-for-byte: only the file system's own metadata is
+rewritten. That distinction is what makes repairing an SSD or hard disk safe — and it is
+covered by tests that assert the MBR is unchanged after every repair.
 
 `ext4`, `APFS` and `HFS+` are diagnosed by this app but repaired by the platform's own tool,
 after explicit consent, because hand-writing journaled metadata is how you lose data. If that
