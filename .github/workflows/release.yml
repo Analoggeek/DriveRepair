@@ -104,13 +104,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[desktop,package,dev]"
 
-      - name: Install Inno Setup 6 (already installed above)
-        run: |
-          choco install innosetup --yes --no-progress
-          echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
-
-      # The suite is its own step, so the step's *name* localises a failure even
-      # when the captured log does not survive the runner.
       - name: Run the test suite
         shell: bash
         timeout-minutes: 30
