@@ -91,12 +91,28 @@ class FullAnalysis:
     issues: list[TableIssue]
     notes: list[str]
 
+    @property
+    def patches(self) -> list[object]:
+        """Repair patches this analysis can justify, whether object- or dict-based."""
+        if hasattr(self.detail, "patches"):
+            return list(getattr(self.detail, "patches") or [])
+        if isinstance(self.detail, dict):
+            return list(self.detail.get("patches") or [])
+        return []
+
     def to_dict(self) -> dict:
+        if hasattr(self.detail, "to_dict"):
+            detail = self.detail.to_dict()
+        elif isinstance(self.detail, dict):
+            # Keep the mapping (including any "patches") instead of stringifying it.
+            detail = self.detail
+        else:
+            detail = str(self.detail)
         return {
             "filesystem": self.filesystem,
             "issues": [i.__dict__ for i in self.issues],
             "notes": self.notes,
-            "detail": self.detail.to_dict() if hasattr(self.detail, "to_dict") else str(self.detail),
+            "detail": detail,
         }
 
 
@@ -138,19 +154,24 @@ def probe_boot_signatures(
     """Search for boot sectors when the volume's first sector is unreadable.
 
     This is the technique that turns "RAW / unrecognised" into an actionable
-    diagnosis: on FAT32 the backup boot sector lives at sector 6, on exFAT at
-    sector 12, and a wrong partition offset shows up as a valid boot sector at a
-    round offset such as 1 MiB.
+    diagnosis: on FAT32 the backup boot sector lives 6 sectors into the volume,
+    on exFAT 12 sectors in, and a wrong partition offset shows up as a valid
+    boot sector at a round absolute offset such as 1 MiB.
+
+    Probes are tried at BOTH the volume-relative offsets (base + n sectors) and
+    the well-known absolute offsets, because a wrong ``base_offset`` is exactly
+    the situation this function exists to detect. ``BootCandidate.offset`` is
+    always absolute.
     """
     candidates: list[BootCandidate] = []
     checked: set[int] = set()
 
-    def probe(offset: int, kind: str, *, allow_partial: bool = False) -> None:
-        if offset in checked:
+    def probe(absolute_offset: int, kind: str, *, allow_partial: bool = False) -> None:
+        if absolute_offset in checked or absolute_offset < 0:
             return
-        checked.add(offset)
+        checked.add(absolute_offset)
         try:
-            data = reader.read(base_offset + offset, 512)
+            data = reader.read(absolute_offset, 512)
         except Exception:
             return
         if len(data) < 512:
@@ -160,7 +181,7 @@ def probe_boot_signatures(
             # A backup copy can have its type string truncated/stale while its
             # BPB geometry (and therefore the recoverability) is intact.
             candidates.append(
-                BootCandidate(offset=offset, filesystem="fat", confidence="likely",
+                BootCandidate(offset=absolute_offset, filesystem="fat", confidence="likely",
                               evidence=[f"{kind}: " + "; ".join(found.evidence)])
             )
             return
@@ -168,23 +189,33 @@ def probe_boot_signatures(
             return
         candidates.append(
             BootCandidate(
-                offset=offset,
+                offset=absolute_offset,
                 filesystem=found.filesystem,
                 confidence=found.confidence,
                 evidence=[f"{kind}: " + "; ".join(found.evidence)],
             )
         )
 
+    # Volume-relative copies first: these are the authentic on-disk backups.
     probe(
-        _FAT32_BACKUP_SECTOR * sector_size,
+        base_offset + _FAT32_BACKUP_SECTOR * sector_size,
         f"backup boot sector (sector {_FAT32_BACKUP_SECTOR})",
         allow_partial=True,
     )
-    probe(_EXFAT_BACKUP_SECTOR * sector_size, f"backup boot region (sector {_EXFAT_BACKUP_SECTOR})")
-    for offset in _PROBE_OFFSETS:
+    probe(
+        base_offset + _EXFAT_BACKUP_SECTOR * sector_size,
+        f"backup boot region (sector {_EXFAT_BACKUP_SECTOR})",
+    )
+    # Then the well-known absolute starts, including the volume base itself.
+    for offset in (base_offset, *_PROBE_OFFSETS):
         probe(offset, f"volume start at offset {offset:,}")
-    candidates.sort(key=lambda c: c.offset)
-    return candidates
+    # De-duplicate by absolute offset, preferring the higher-confidence record.
+    unique: dict[int, BootCandidate] = {}
+    for cand in candidates:
+        current = unique.get(cand.offset)
+        if current is None or (current.confidence != "certain" and cand.confidence == "certain"):
+            unique[cand.offset] = cand
+    return sorted(unique.values(), key=lambda c: c.offset)
 
 
 def analyze_volume(
@@ -280,8 +311,14 @@ def _candidate_restore(
 
     sector = reader.sector_size or 512
     for cand in candidates:
-        if cand.offset == _FAT32_BACKUP_SECTOR * sector and cand.filesystem.startswith("fat"):
-            backup = reader.read(base_offset + cand.offset, sector)
+        # ``cand.offset`` is absolute. Recognise the backup by its position
+        # *within this volume*, not by an absolute number that only happens to be
+        # right when the volume starts at LBA 0.
+        if (
+            cand.offset == base_offset + _FAT32_BACKUP_SECTOR * sector
+            and cand.filesystem.startswith("fat")
+        ):
+            backup = reader.read(cand.offset, sector)
             if len(backup) < sector or backup[510:512] != b"\x55\xaa":
                 continue
             detail.setdefault("patches", []).append(
@@ -304,8 +341,11 @@ def _candidate_restore(
                 )
             )
             return issues
-        if cand.offset == _EXFAT_BACKUP_SECTOR * sector and cand.filesystem.startswith("exfat"):
-            backup_region = reader.read(base_offset + cand.offset, 12 * sector)
+        if (
+            cand.offset == base_offset + _EXFAT_BACKUP_SECTOR * sector
+            and cand.filesystem.startswith("exfat")
+        ):
+            backup_region = reader.read(cand.offset, 12 * sector)
             if len(backup_region) < 12 * sector:
                 continue
             detail.setdefault("patches", []).append(

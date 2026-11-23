@@ -407,6 +407,9 @@ class DoctorService:
         filesystem_info: Optional[dict[str, Any]] = None
         fs_issues: list[Any] = []
         detected_fs = "unknown"
+        # Absolute offset of the volume the findings describe. Repairs are
+        # patched there, so a partitioned disk keeps its partition table.
+        analysed_volume_offset = 0
         if options.analyze_filesystem:
             emit("stage", {"stage": "filesystem", "message": "Verifying file-system structures"})
             base_offset = 0
@@ -431,14 +434,13 @@ class DoctorService:
                                 if offset and size:
                                     first = (offset, size)
                                     break
+                    analysed_volume_offset = base_offset
                     if first is not None:
-                        if True:
-                            analysis = analyze_volume(
-                                reader, first[0], volume_size=first[1]
-                            )
-                            limitations.append(
-                                f"File system analysed at partition offset {human_size(first[0])}."
-                            )
+                        analysis = analyze_volume(reader, first[0], volume_size=first[1])
+                        analysed_volume_offset = first[0]
+                        limitations.append(
+                            f"File system analysed at partition offset {human_size(first[0])}."
+                        )
                     filesystem_info = analysis.to_dict()
                     fs_issues = list(analysis.issues)
                     detected_fs = analysis.filesystem
@@ -584,6 +586,7 @@ class DoctorService:
             partition_scheme=partition_info.get("scheme", "none"),
         )
         evidence.detected_fs = detected_fs if detected_fs != "unknown" else None
+        evidence.volume_base_offset = int(analysed_volume_offset or 0)
         # Re-use the full evidence collector for patch availability, but keep the
         # scan's own findings (they may cover a partition rather than the disk).
         try:
@@ -596,6 +599,8 @@ class DoctorService:
             if full_evidence.filesystem != "unknown":
                 detected_fs = full_evidence.filesystem
                 evidence.filesystem = detected_fs
+            if not evidence.volume_base_offset:
+                evidence.volume_base_offset = full_evidence.volume_base_offset
         except Exception:
             pass
 

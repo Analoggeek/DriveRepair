@@ -66,6 +66,10 @@ class ScanEvidence:
     detected_fs: Optional[str] = None
     #: Offset of a valid volume found inside an unpartitioned range.
     volume_start_hint: Optional[int] = None
+    #: Absolute byte offset of the volume the file-system findings describe.
+    #: Repairs must target this, not LBA 0, or a partitioned disk loses its
+    #: partition table to a "repair" of a healthy sector.
+    volume_base_offset: int = 0
 
     def codes(self) -> set[str]:
         out = {getattr(i, "code", "") for i in self.filesystem_issues}
@@ -148,14 +152,20 @@ def collect_evidence(device: DeviceRef, *, health: Optional[HealthReport] = None
                             i for i in part_view.issues if i.code not in ("FS_WIPED", "FS_BLANK", "FS_UNKNOWN")
                         ]
                     else:
-                        volume = part_view
                         evidence.detected_fs = part_view.filesystem
+                    # Always adopt the partition view: it is the analysis that
+                    # describes the volume being repaired. Its patches (e.g. a
+                    # boot sector restorable from the backup at sector 6) are
+                    # relative to that partition, not to the disk.
+                    volume = part_view
                     evidence.device.native["analysed_partition_offset"] = first.offset
                     analysed_offset = first.offset
-            patches = getattr(volume.detail, "patches", None)
-            if patches is None and isinstance(volume.detail, dict):
-                patches = volume.detail.get("patches")
-            evidence.filesystem_patches = [p if isinstance(p, dict) else p.to_dict() for p in (patches or [])]
+            # ``FullAnalysis.patches`` normalises object- and dict-based details;
+            # reaching into ``volume.detail`` lost the patches for the
+            # "boot sector destroyed" path, where detail is a plain dict.
+            evidence.filesystem_patches = [
+                p if isinstance(p, dict) else p.to_dict() for p in volume.patches
+            ]
             if volume.filesystem == "unknown" and not (device.partitions or mbr.entries):
                 candidates = probe_boot_signatures(reader, base_offset, sector_size=reader.sector_size)
                 for cand in candidates:
@@ -170,6 +180,7 @@ def collect_evidence(device: DeviceRef, *, health: Optional[HealthReport] = None
                             evidence.detected_fs = cand.filesystem
                             evidence.volume_start_hint = cand.offset
                             break
+        evidence.volume_base_offset = analysed_offset or 0
     except Exception as exc:  # unreadable device: record, do not crash
         evidence.partition_issues.append(
             type("Issue", (), {"code": "DEVICE_UNREADABLE", "severity": "critical", "message": str(exc)})()
@@ -213,16 +224,23 @@ def plan_repairs(evidence: ScanEvidence, *, mode: str = "smart", dry_run: bool =
         )
 
     # 1. Partition signature ------------------------------------------------
-    boot_sector_repair_planned = bool(
+    restore_patch = bool(
         set(p.get("reason_code", "") for p in evidence.filesystem_patches)
         & {"FAT32_RESTORE_PRIMARY_BOOT", "FAT_BOOT_RESTORE", "EXFAT_RESTORE_BOOT_REGION"}
-    ) or bool({"FAT_BOOT_SECTOR_DESTROYED", "EXFAT_BOOT_REGION_DESTROYED", "VOLUME_START_MISMATCH"} & codes)
-    # When a complete backup boot sector will restore the volume, patching the
-    # MBR signature first would be pointless and would hide the real fault.
+    )
+    boot_sector_repair_planned = restore_patch or bool(
+        {"FAT_BOOT_SECTOR_DESTROYED", "EXFAT_BOOT_REGION_DESTROYED"} & codes
+    )
+    # Only defer the MBR signature when the file system at LBA 0 is itself the
+    # thing being rebuilt — in that case the "missing" 0x55AA belongs to the
+    # volume's boot record, not to a partition table. When a partition table is
+    # present and readable, a missing 0x55AA is genuine MBR damage and must be
+    # repaired, volume or no volume.
+    table_present = evidence.mbr_has_partitions or evidence.partition_scheme == "gpt"
     if (
         not evidence.mbr_signature_ok
         and evidence.partition_scheme in ("none", "unknown", "mbr")
-        and not boot_sector_repair_planned
+        and (table_present or not boot_sector_repair_planned)
     ):
         plans.append(
             RepairPlan(
@@ -290,8 +308,20 @@ def plan_repairs(evidence: ScanEvidence, *, mode: str = "smart", dry_run: bool =
     patch_codes = {p.get("reason_code", "") for p in evidence.filesystem_patches}
     filesystem_family = evidence.filesystem or evidence.detected_fs or ""
     if filesystem_family.startswith("fat") or filesystem_family in ("fat", "unknown", "") or evidence.detected_fs:
-        if patch_codes & {"FAT32_RESTORE_PRIMARY_BOOT", "FAT_BOOT_RESTORE"} or any(
-            c in codes for c in ("FAT_BOOT_SIGNATURE_MISSING", "FAT_BOOT_SECTOR_DESTROYED", "FAT32_BACKUP_REQUIRED")
+        # A primary boot sector wiped to zeroes does not identify as FAT any
+        # more, so the analyser reports VOLUME_START_MISMATCH instead. The
+        # backup copy 6 sectors in is still intact, which is exactly what makes
+        # this repairable — do not hide that behind "file-level recovery only".
+        wiped_but_backed_up = "VOLUME_START_MISMATCH" in codes and (
+            evidence.volume_base_offset or 0
+        ) >= 0 and bool(evidence.filesystem_patches)
+        if (
+            patch_codes & {"FAT32_RESTORE_PRIMARY_BOOT", "FAT_BOOT_RESTORE"}
+            or wiped_but_backed_up
+            or any(
+                c in codes
+                for c in ("FAT_BOOT_SIGNATURE_MISSING", "FAT_BOOT_SECTOR_DESTROYED", "FAT32_BACKUP_REQUIRED")
+            )
         ):
             plans.append(
                 RepairPlan(
@@ -333,8 +363,15 @@ def plan_repairs(evidence: ScanEvidence, *, mode: str = "smart", dry_run: bool =
                 )
             )
 
-    if evidence.filesystem == "exfat" or evidence.detected_fs == "exfat":
-        if "EXFAT_BOOT_CHECKSUM" in codes or "EXFAT_BOOT_REGION_DESTROYED" in codes:
+    # A wiped primary no longer identifies as exFAT, but the analyser still
+    # found the intact backup region and produced the restore patch for it.
+    exfat_restorable = "EXFAT_RESTORE_BOOT_REGION" in patch_codes
+    if evidence.filesystem == "exfat" or evidence.detected_fs == "exfat" or exfat_restorable:
+        if (
+            "EXFAT_BOOT_CHECKSUM" in codes
+            or "EXFAT_BOOT_REGION_DESTROYED" in codes
+            or exfat_restorable
+        ):
             plans.append(
                 RepairPlan(
                     operation_id="exfat-boot",
@@ -456,6 +493,15 @@ def plan_repairs(evidence: ScanEvidence, *, mode: str = "smart", dry_run: bool =
     # (which were computed on the damaged volume) obsolete.
     restart_order = {"fat-boot": 0, "exfat-boot": 0, "ntfs-boot": 0, "partition-table-rebuild": 1}
     order = {Risk.NONE: 0, Risk.LOW: 1, Risk.MEDIUM: 2, Risk.HIGH: 3, Risk.CRITICAL: 4}
+    # File-system repairs are relative to the volume, not to LBA 0. Carry the
+    # offset the analysis used so the runner patches the right bytes.
+    volume_ops = {
+        "fat-boot", "fat-mirror", "fat-fsinfo", "exfat-boot", "exfat-dirty", "ntfs-boot",
+    }
+    for plan in plans:
+        if plan.operation_id in volume_ops:
+            plan.evidence["volume_base_offset"] = evidence.volume_base_offset or 0
+
     plans.sort(key=lambda p: (restart_order.get(p.operation_id, 5), order[p.risk], p.operation_id))
     if not is_admin():
         for plan in plans:

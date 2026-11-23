@@ -105,6 +105,11 @@ class RepairExecutor:
                 audit=self.audit,
                 emitter=emitter,
                 dry_run=dry_run,
+                # The plan was built against a specific volume inside the device;
+                # the runner must patch that volume, never assume LBA 0.
+                options={
+                    "volume_base_offset": int((plan.evidence or {}).get("volume_base_offset") or 0)
+                },
             )
             started = time.time()
             try:

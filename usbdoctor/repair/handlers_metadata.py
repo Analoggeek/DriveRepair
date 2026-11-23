@@ -27,7 +27,18 @@ from usbdoctor.repair.base import RepairResult, RepairStatus, RunContext
 from usbdoctor.repair.patches import PatchRecord, apply_patches
 
 
-def _volume_reader(ctx: RunContext, offset: int = 0) -> DiskReader:
+def _volume_base(ctx: RunContext) -> int:
+    """Absolute byte offset where this operation's volume begins.
+
+    Attached drives are almost always partitioned, so the file system starts at
+    the partition's offset rather than at LBA 0. The scan records where it
+    analysed the volume and hands it to the runner; without this every repair
+    would write at offset 0 and corrupt the partition table of a healthy disk.
+    """
+    return int(ctx.options.get("volume_base_offset") or 0)
+
+
+def _volume_reader(ctx: RunContext) -> DiskReader:
     reader = DiskReader(ctx.device.path, sector_size=ctx.device.sector_size)
     reader.open()
     return reader
@@ -205,20 +216,21 @@ FAT_BOOT_REASON_CODES = (
 
 
 def repair_fat_boot_sector(ctx: RunContext) -> RepairResult:
+    base = _volume_base(ctx)
     with _volume_reader(ctx) as reader:
         sector_size = reader.sector_size or 512
-        analysis = FatAnalyzer(reader).analyze()
+        analysis = FatAnalyzer(reader, base).analyze()
         patches: list[PatchRecord] = []
         if analysis.variant == "fat32":
-            backup_ptr = struct.unpack("<H", reader.read(50, 2))[0]
+            backup_ptr = struct.unpack("<H", reader.read(base + 50, 2))[0]
             for candidate_sector in (backup_ptr or 6, 6):
                 if not candidate_sector:
                     continue
-                backup = reader.read(candidate_sector * sector_size, sector_size)
+                backup = reader.read(base + candidate_sector * sector_size, sector_size)
                 if len(backup) >= sector_size and backup[510:512] == MBR_SIGNATURE:
                     patches.append(
                         PatchRecord(
-                            0,
+                            base,
                             backup,
                             f"Restore primary boot sector from verified backup at sector {candidate_sector}",
                             "FAT32_RESTORE_PRIMARY_BOOT",
@@ -226,25 +238,38 @@ def repair_fat_boot_sector(ctx: RunContext) -> RepairResult:
                     )
                     break
         if not patches:
-            candidates = probe_boot_signatures(reader, 0, sector_size=sector_size)
+            candidates = probe_boot_signatures(reader, base, sector_size=sector_size)
             for cand in candidates:
-                if cand.offset == 12 * sector_size and cand.filesystem.startswith("exfat"):
+                relative = cand.offset - base
+                # The primary is being written at ``base``, so the source must be
+                # the backup belonging to *this* volume. Never accept a backup
+                # from elsewhere on the disk (that is how a FAT boot sector ends
+                # up written over an NTFS one).
+                if relative == 12 * sector_size and cand.filesystem.startswith("exfat"):
                     region = reader.read(cand.offset, 12 * sector_size)
-                    if len(region) == 12 * sector_size and region[3:11] == b"EXFAT   ":
+                    if (
+                        len(region) == 12 * sector_size
+                        and region[3:11] == b"EXFAT   "
+                        and region[510:512] == MBR_SIGNATURE
+                    ):
                         patches.append(
                             PatchRecord(
-                                0,
+                                base,
                                 region,
                                 "Restore the exFAT boot region from its backup at sector 12",
                                 "EXFAT_RESTORE_BOOT_REGION",
                             )
                         )
                         break
-                if cand.offset == 6 * sector_size and cand.filesystem.startswith("fat"):
+                if relative == 6 * sector_size and cand.filesystem.startswith("fat"):
                     data = reader.read(cand.offset, sector_size)
-                    if len(data) == sector_size and data[510:512] == MBR_SIGNATURE:
+                    if (
+                        len(data) == sector_size
+                        and data[510:512] == MBR_SIGNATURE
+                        and (data[3:11] == b"MSWIN4.1" or data[82:90] == b"FAT32   ")
+                    ):
                         patches.append(
-                            PatchRecord(0, data, "Restore boot sector from backup at sector 6", "FAT_BOOT_RESTORE")
+                            PatchRecord(base, data, "Restore boot sector from backup at sector 6", "FAT_BOOT_RESTORE")
                         )
                         break
     if not patches:
@@ -256,7 +281,7 @@ def repair_fat_boot_sector(ctx: RunContext) -> RepairResult:
 
     def verify() -> tuple[bool, str]:
         with _volume_reader(ctx) as reader:
-            again = FatAnalyzer(reader).analyze()
+            again = FatAnalyzer(reader, base).analyze()
         if again.variant.startswith("fat"):
             return True, f"Boot sector restored; volume now identifies as {again.variant.upper()}."
         return False, "Boot sector restored but the volume still does not parse as FAT."
@@ -265,12 +290,13 @@ def repair_fat_boot_sector(ctx: RunContext) -> RepairResult:
 
 
 def repair_fat_mirror(ctx: RunContext) -> RepairResult:
+    base = _volume_base(ctx)
     with _volume_reader(ctx) as reader:
-        analysis = FatAnalyzer(reader).analyze()
+        analysis = FatAnalyzer(reader, base).analyze()
         bps = analysis.bytes_per_sector
         if analysis.num_fats != 2:
             return RepairResult.skipped("This volume has a single FAT copy; nothing to synchronise.")
-        fat_start = analysis.reserved_sectors * bps
+        fat_start = base + analysis.reserved_sectors * bps
         fat_bytes = analysis.fat_size_sectors * bps
         if fat_bytes > 64 << 20:
             return RepairResult.failure(
@@ -293,7 +319,7 @@ def repair_fat_mirror(ctx: RunContext) -> RepairResult:
 
     def verify() -> tuple[bool, str]:
         with _volume_reader(ctx) as reader:
-            again = FatAnalyzer(reader).analyze()
+            again = FatAnalyzer(reader, base).analyze()
         if again.fat_copies_match:
             return True, "Both FAT copies now match."
         return False, f"FAT copies still differ in {again.fat_diff_bytes} bytes."
@@ -302,15 +328,16 @@ def repair_fat_mirror(ctx: RunContext) -> RepairResult:
 
 
 def repair_fat_fsinfo(ctx: RunContext) -> RepairResult:
+    base = _volume_base(ctx)
     with _volume_reader(ctx) as reader:
-        analysis = FatAnalyzer(reader).analyze()
+        analysis = FatAnalyzer(reader, base).analyze()
         if analysis.variant != "fat32":
             return RepairResult.skipped("FSInfo only exists on FAT32 volumes.")
         sector_size = analysis.bytes_per_sector
-        fsinfo_sector = struct.unpack("<H", reader.read(48, 2))[0]
+        fsinfo_sector = struct.unpack("<H", reader.read(base + 48, 2))[0]
         if not fsinfo_sector:
             return RepairResult.failure("The boot sector does not point at an FSInfo sector.")
-        current = bytearray(reader.read(fsinfo_sector * sector_size, sector_size))
+        current = bytearray(reader.read(base + fsinfo_sector * sector_size, sector_size))
         if len(current) < sector_size:
             return RepairResult.failure("FSInfo sector could not be read.")
         struct.pack_into("<I", current, 0, 0x41615252)
@@ -320,7 +347,7 @@ def repair_fat_fsinfo(ctx: RunContext) -> RepairResult:
         struct.pack_into("<I", current, 508, 0xAA550000)
         patches = [
             PatchRecord(
-                fsinfo_sector * sector_size,
+                base + fsinfo_sector * sector_size,
                 bytes(current),
                 "Rewrite FSInfo signatures and invalidate cached free-space counters",
                 "FAT32_FSINFO_REBUILD",
@@ -329,7 +356,7 @@ def repair_fat_fsinfo(ctx: RunContext) -> RepairResult:
 
     def verify() -> tuple[bool, str]:
         with _volume_reader(ctx) as reader:
-            again = FatAnalyzer(reader).analyze()
+            again = FatAnalyzer(reader, base).analyze()
         if again.fsinfo_valid:
             return True, "FSInfo signatures now verify."
         return False, "FSInfo still does not verify."
@@ -343,10 +370,11 @@ def repair_fat_fsinfo(ctx: RunContext) -> RepairResult:
 
 
 def repair_exfat_boot(ctx: RunContext) -> RepairResult:
+    base = _volume_base(ctx)
     with _volume_reader(ctx) as reader:
         sector_size = reader.sector_size or 512
-        primary = reader.read(0, 12 * sector_size)
-        backup = reader.read(12 * sector_size, 12 * sector_size)
+        primary = reader.read(base, 12 * sector_size)
+        backup = reader.read(base + 12 * sector_size, 12 * sector_size)
         if len(backup) < 12 * sector_size or backup[3:11] != b"EXFAT   ":
             return RepairResult(
                 status=RepairStatus.NOT_APPLICABLE,
@@ -366,12 +394,12 @@ def repair_exfat_boot(ctx: RunContext) -> RepairResult:
         if not needs:
             return RepairResult.skipped("The exFAT primary boot region already verifies.")
         patches = [
-            PatchRecord(0, backup, "Restore exFAT boot region from its verified backup copy", "EXFAT_RESTORE_BOOT_REGION")
+            PatchRecord(base, backup, "Restore exFAT boot region from its verified backup copy", "EXFAT_RESTORE_BOOT_REGION")
         ]
 
     def verify() -> tuple[bool, str]:
         with _volume_reader(ctx) as reader:
-            again = ExfatAnalyzer(reader).analyze()
+            again = ExfatAnalyzer(reader, base).analyze()
         if again.boot_checksum_valid:
             return True, "exFAT boot region checksum now verifies."
         return False, "exFAT boot region still fails checksum verification."
@@ -380,8 +408,9 @@ def repair_exfat_boot(ctx: RunContext) -> RepairResult:
 
 
 def repair_exfat_dirty(ctx: RunContext) -> RepairResult:
+    base = _volume_base(ctx)
     with _volume_reader(ctx) as reader:
-        sector = reader.read(0, 512)
+        sector = reader.read(base, 512)
         if sector[3:11] != b"EXFAT   ":
             return RepairResult.skipped("This volume is not exFAT.")
         flags = struct.unpack("<H", sector[106:108])[0]
@@ -395,17 +424,17 @@ def repair_exfat_dirty(ctx: RunContext) -> RepairResult:
         new_flags = flags & ~0x0002
         patches = [
             PatchRecord(
-                106,
+                base + 106,
                 struct.pack("<H", new_flags),
                 f"Clear the exFAT dirty flag (0x{flags:04X} → 0x{new_flags:04X})",
                 "EXFAT_CLEAR_DIRTY",
             ),
-            PatchRecord(24, struct.pack("<H", new_flags), "Mirror the flag update in the backup boot region", "EXFAT_CLEAR_DIRTY_BACKUP"),
+            PatchRecord(base + 24, struct.pack("<H", new_flags), "Mirror the flag update in the backup boot region", "EXFAT_CLEAR_DIRTY_BACKUP"),
         ]
 
     def verify() -> tuple[bool, str]:
         with _volume_reader(ctx) as reader:
-            again = ExfatAnalyzer(reader).analyze()
+            again = ExfatAnalyzer(reader, base).analyze()
         if not again.dirty:
             return True, "The dirty flag is cleared."
         return False, "The dirty flag is still set."
@@ -419,19 +448,25 @@ def repair_exfat_dirty(ctx: RunContext) -> RepairResult:
 
 
 def repair_ntfs_boot(ctx: RunContext) -> RepairResult:
+    base = _volume_base(ctx)
     with _volume_reader(ctx) as reader:
-        sector = reader.read(0, 512)
+        sector = reader.read(base, 512)
         if sector[3:11] != b"NTFS    ":
             return RepairResult.skipped("This volume is not NTFS.")
         if sector[510:512] == MBR_SIGNATURE:
             return RepairResult.skipped("NTFS boot signature already present.")
         patches = [
-            PatchRecord(510, MBR_SIGNATURE, "Restore the NTFS boot-sector signature 0x55AA", "NTFS_BOOT_SIGNATURE")
+            PatchRecord(
+                base + 510,
+                MBR_SIGNATURE,
+                "Restore the NTFS boot-sector signature 0x55AA",
+                "NTFS_BOOT_SIGNATURE",
+            )
         ]
 
     def verify() -> tuple[bool, str]:
         with _volume_reader(ctx) as reader:
-            again = analyze_ntfs(reader)
+            again = analyze_ntfs(reader, base)
         if any(i.code == "NTFS_BOOT_SIGNATURE_MISSING" for i in again.issues):
             return False, "The NTFS signature still does not verify."
         if not again.mft_runs:
