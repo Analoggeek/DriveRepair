@@ -13,6 +13,10 @@ on:
         description: "Sign the artifacts (requires signing secrets to be configured)"
         type: boolean
         default: false
+      iss_only:
+        description: "Temporary: compile only the Windows installer script and stop"
+        type: boolean
+        default: false
   push:
     tags:
       - "v*"
@@ -70,12 +74,37 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
 
+      - name: Install Inno Setup 6
+        run: |
+          choco install innosetup --yes --no-progress
+          echo "C:\\Program Files (x86)\\Inno Setup 6" >> $env:GITHUB_PATH
+
+      # Temporary: a full build takes ~25 minutes, which is a slow way to read one
+      # compiler message. This compiles just the script against a dummy folder and
+      # stops the job, so every later step is skipped.
+      - name: Compile the installer script only
+        if: ${{ inputs.iss_only }}
+        shell: bash
+        run: |
+          mkdir -p dist/USBDoctorAI/_internal dist/USBDoctorAI/docs
+          printf 'stub\n' > dist/USBDoctorAI/USBDoctorAI.exe
+          printf 'stub\n' > dist/USBDoctorAI/_internal/base_library.zip
+          printf 'stub\n' > dist/USBDoctorAI/docs/readme.txt
+          ls -R dist/USBDoctorAI | head -20
+          ISCC="C:/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          "$ISCC" /? | head -3 || true
+          "$ISCC" installers/windows/usbdoctor.iss > iss.log 2>&1
+          echo "ISCC exit: $?"
+          echo "=== log ($(wc -c < iss.log) bytes) ==="
+          cat -A iss.log | tail -45
+          exit 1
+
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[desktop,package,dev]"
 
-      - name: Install Inno Setup 6
+      - name: Install Inno Setup 6 (already installed above)
         run: |
           choco install innosetup --yes --no-progress
           echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
