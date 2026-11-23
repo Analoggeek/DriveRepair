@@ -98,6 +98,15 @@ class HealthReport:
             "counts": self.counts(),
         }
 
+    @property
+    def verdict_summary(self) -> str:
+        """Short human description of the verdict (mirrors the JSON field)."""
+        return self.verdict.summary
+
+    @property
+    def verdict_color(self) -> str:
+        return self.verdict.color
+
     def counts(self) -> dict[str, int]:
         out = {"info": 0, "warning": 0, "error": 0, "critical": 0}
         for finding in self.findings:
