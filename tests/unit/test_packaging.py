@@ -478,3 +478,29 @@ class TestSpecRootResolution:
     def test_launcher_is_the_declared_entry_point(self, spec):
         assert (ROOT / "launcher.py").exists()
         assert 'ROOT / "launcher.py"' in spec.read_text(encoding="utf-8")
+
+
+class TestFreezeBudget:
+    """The freeze needs a bigger budget than an ordinary command.
+
+    A cold Windows runner scans every bundled Qt file, so a legitimate freeze can
+    take far longer than a test run. Killing it at the generic 15-minute deadline
+    produces a failure that looks like a hang.
+    """
+
+    SOURCE = (ROOT / "tools/build_release.py").read_text(encoding="utf-8")
+
+    def test_freeze_timeout_is_generous(self):
+        import re
+
+        match = re.search(r"FREEZE_TIMEOUT\s*=\s*([0-9.]+)", self.SOURCE)
+        assert match, "FREEZE_TIMEOUT is not defined"
+        assert float(match.group(1)) >= 1800, "the freeze budget is too tight for a cold runner"
+
+    def test_every_pyinstaller_call_uses_it(self):
+        import re
+
+        for match in re.finditer(r"run\(\s*(?:\[|probe_args)(.*?)\)", self.SOURCE, re.S):
+            call = match.group(0)
+            if "PyInstaller" in call or "probe_args" in call:
+                assert "FREEZE_TIMEOUT" in call, f"PyInstaller call without the freeze budget:\n{call[:160]}"

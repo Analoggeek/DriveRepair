@@ -51,7 +51,9 @@ _json_mode = False
 
 
 def _echo(message: str) -> None:
-    print(message, file=sys.stderr if _json_mode else sys.stdout)
+    # flush: when a build is killed for hanging, a buffered log is an empty log
+    # and there is nothing left to diagnose.
+    print(message, file=sys.stderr if _json_mode else sys.stdout, flush=True)
 
 
 def log(message: str) -> None:
@@ -62,6 +64,9 @@ def log(message: str) -> None:
 # the build runs the test suite, and the suite exercises this tool, so without a
 # marker one build can spawn another, which spawns another, forever.
 IN_PROGRESS_ENV = "USBDOCTOR_BUILD_IN_PROGRESS"
+
+# A freeze is the slowest step and the one most affected by the build machine.
+FREEZE_TIMEOUT = 2400.0
 
 
 def run(
@@ -222,7 +227,12 @@ def build_windows(args) -> dict:
     for stale in ("build", "dist"):
         if (ROOT / stale).exists():
             shutil.rmtree(ROOT / stale)
-    run([python, "-m", "PyInstaller", "installers/USBDoctorAI.spec", "--noconfirm", "--clean"])
+    # Antivirus scanning thousands of Qt files makes a cold Windows freeze slow;
+    # 15 minutes is not a hang, it is a Windows runner doing its job.
+    run(
+        [python, "-m", "PyInstaller", "installers/USBDoctorAI.spec", "--noconfirm", "--clean"],
+        timeout=FREEZE_TIMEOUT,
+    )
 
     bundle = DIST / "USBDoctorAI"
     exe = bundle / "USBDoctorAI.exe"
@@ -247,7 +257,7 @@ def build_windows(args) -> dict:
         ("usbdoctor/frontend/web/assets", "usbdoctor/frontend/web/assets"),
     ):
         probe_args += ["--add-data", f"{source};{dest}"]
-    run(probe_args)
+    run(probe_args, timeout=FREEZE_TIMEOUT)
     probe = probe_dir / "USBDoctorAIConsole.exe"
     if not probe.exists():
         raise BuildError("the console probe was not produced")
@@ -311,7 +321,10 @@ def build_macos(args) -> dict:
     for stale in ("build", "dist"):
         if (ROOT / stale).exists():
             shutil.rmtree(ROOT / stale)
-    run([python, "-m", "PyInstaller", "installers/macos/USBDoctorAI.spec", "--noconfirm", "--clean"])
+    run(
+        [python, "-m", "PyInstaller", "installers/macos/USBDoctorAI.spec", "--noconfirm", "--clean"],
+        timeout=FREEZE_TIMEOUT,
+    )
 
     app = DIST / "USBDoctorAI.app"
     binary = app / "Contents" / "MacOS" / "USBDoctorAI"
@@ -474,7 +487,12 @@ def _portable_only_windows(args) -> dict:
         log("Running the test suite")
         run([python, "-m", "pytest", "tests", "-q"], env={IN_PROGRESS_ENV: "1"})
     log("Freezing the application")
-    run([python, "-m", "PyInstaller", "installers/USBDoctorAI.spec", "--noconfirm", "--clean"])
+    # Antivirus scanning thousands of Qt files makes a cold Windows freeze slow;
+    # 15 minutes is not a hang, it is a Windows runner doing its job.
+    run(
+        [python, "-m", "PyInstaller", "installers/USBDoctorAI.spec", "--noconfirm", "--clean"],
+        timeout=FREEZE_TIMEOUT,
+    )
     bundle = DIST / "USBDoctorAI"
     if not (bundle / "USBDoctorAI.exe").exists():
         raise BuildError("PyInstaller did not produce the portable folder")
