@@ -36,16 +36,30 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install pytest PySide6-Essentials
+          python -m pip install -e ".[dev,desktop]"
+      # PySide6 links against the system graphics/X stack; without these the
+      # desktop tests fail at collection on a bare Ubuntu runner and the whole
+      # release is blocked by a test that never ran.
+      - name: Install the Qt system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 \
+            libfontconfig1 libfreetype6 libglib2.0-0 \
+            libxcb1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xkb1 \
+            libxcb-xfixes0 libxcb-sync1 libxcb-shm0 libxcb-util1
       - name: Unit + integration tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest tests -q
+        run: python -m pytest tests -q --tb=short -ra
 
   windows:
     name: Windows installer
     needs: test
     runs-on: windows-latest
+    # A stalled queue must become a red run, not a permanently pending one.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -56,7 +70,7 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "PySide6-Essentials>=6.5" "pyinstaller>=6.0" "Pillow>=10.0" pytest
+          python -m pip install -e ".[desktop,package,dev]"
 
       - name: Install Inno Setup 6
         run: |
@@ -64,7 +78,30 @@ jobs:
           echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
 
       - name: Build, verify and package
-        run: python tools/build_release.py --json | Tee-Object -FilePath build-report.json
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/build_release.py --json 2>&1 | tee build-report.log
+
+      # Job logs are served from storage that is not always reachable, while
+      # annotations travel over the normal API. Publish the tail of the build log
+      # so a failed build says where it stopped instead of only "exit code 1".
+      - name: Report the build failure
+        if: failure()
+        shell: bash
+        run: |
+          tail -c 2500 build-report.log 2>/dev/null | tr '\n' ' ' | sed 's/^/::error::build log tail: /' || true
+
+      - name: Upload the build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-log
+          path: |
+            build-report.log
+            dist/**
+          if-no-files-found: ignore
+          retention-days: 5
 
       - name: Upload the offline installer
         uses: actions/upload-artifact@v4
@@ -91,28 +128,55 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Live labels only. macos-13 (Intel) was retired in December 2025: GitHub
+        # keeps accepting jobs for a retired label but no runner ever claims one,
+        # so the Intel leg sat queued for 80 minutes looking perfectly healthy.
+        # macos-14 was retired on 2 November 2026 and now fails outright.
+        # macos-15-intel is the last Intel image GitHub will publish; Apple has
+        # ended x86_64 support and this label is expected to retire in 2027.
         include:
-          - runner: macos-14
+          - runner: macos-15
             arch: arm64
             label: AppleSilicon
-          - runner: macos-13
-            arch: x86_64
+          - runner: macos-15-intel
+            arch: x64
             label: Intel
     runs-on: ${{ matrix.runner }}
+    # A stalled queue must become a red run, not a permanently pending one.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          architecture: ${{ matrix.arch == 'arm64' && 'arm64' || 'x64' }}
 
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "PySide6-Essentials>=6.5" "pyinstaller>=6.0" "Pillow>=10.0" pytest
+          python -m pip install -e ".[desktop,package,dev]"
 
       - name: Build, verify and package
-        run: python tools/build_release.py --json | tee build-report.json
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/build_release.py --json 2>&1 | tee build-report.log
+
+      - name: Report the build failure
+        if: failure()
+        shell: bash
+        run: |
+          tail -c 2500 build-report.log 2>/dev/null | tr '\n' ' ' | sed 's/^/::error::build log tail: /' || true
+
+      - name: Upload the build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-log-${{ matrix.arch }}
+          path: |
+            build-report.log
+            dist/**
+          if-no-files-found: ignore
+          retention-days: 5
 
       - name: Report the bundle architecture
         run: |
@@ -134,6 +198,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/USBDoctorAI-*.dmg
-            dist/USBDoctorAI-*-portable.zip
+            dist/USBDoctorAI-*-${{ matrix.arch }}.dmg
+            dist/USBDoctorAI-*-${{ matrix.arch }}-portable.zip
           fail_on_unmatched_files: true

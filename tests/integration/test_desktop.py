@@ -11,6 +11,8 @@ import os
 
 import pytest
 
+from tests.support import wait_for
+
 PySide6 = pytest.importorskip("PySide6", reason="desktop UI not installed")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
@@ -96,12 +98,11 @@ class TestDesktopShell:
         window.on_device_selected(window.devices_page.device_paths()[0])
         window.show_page("scan")
         window.scan_page.start_scan()
-        for _ in range(600):
+        def finished():
             qapp.processEvents()
-            if window.scan_page.job_id is None:
-                break
-            time.sleep(0.02)
-        assert window.scan_page.job_id is None, "the scan never completed"
+            return window.scan_page.job_id is None
+
+        wait_for(finished, timeout=120, message="the scan never completed")
         assert window.scan_page.verdict_badge.text() in ("WARNING", "CRITICAL")
         assert "repairable" in window.scan_page.headline.text().lower()
 

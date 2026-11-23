@@ -10,6 +10,7 @@ import glob
 import json
 import os
 import re
+from dataclasses import replace
 from typing import Any, Optional
 
 from usbdoctor.core.errors import UsbDoctorError
@@ -308,19 +309,32 @@ class LinuxDeviceProvider:
             }
 
         # partition offsets --------------------------------------------------
-        for part in device.partitions:
+        # Partition is a frozen dataclass, so each record is rebuilt with
+        # dataclasses.replace instead of being assigned to. Assigning raised
+        # FrozenInstanceError on every machine that actually has a partitioned
+        # disk (the lsblk path leaves offset_bytes at 0 until here), which meant
+        # enumeration failed outright on a normal Linux desktop.
+        for position, part in enumerate(device.partitions):
             if part.offset_bytes:
                 continue
             pname = os.path.basename(part.path or "")
             start = _sysfs_int(pname, "start")
-            if start:
-                part.offset_bytes = start * 512
-            if part.filesystem is None:
-                part.filesystem = _blkid_field(part.path or "", "TYPE")
-            if part.label is None:
-                part.label = _blkid_field(part.path or "", "LABEL")
-            if part.uuid is None:
-                part.uuid = _blkid_field(part.path or "", "UUID")
+            filesystem = part.filesystem
+            label = part.label
+            uuid = part.uuid
+            if filesystem is None:
+                filesystem = _blkid_field(part.path or "", "TYPE")
+            if label is None:
+                label = _blkid_field(part.path or "", "LABEL")
+            if uuid is None:
+                uuid = _blkid_field(part.path or "", "UUID")
+            device.partitions[position] = replace(
+                part,
+                offset_bytes=start * 512 if start else part.offset_bytes,
+                filesystem=filesystem,
+                label=label,
+                uuid=uuid,
+            )
 
         # write protection ----------------------------------------------------
         ro = _sysfs_int(name, "ro")

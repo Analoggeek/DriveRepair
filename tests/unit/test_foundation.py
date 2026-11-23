@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 
 import pytest
@@ -56,7 +57,10 @@ class TestFiles:
             path = os.path.join(tmp, "nested", "data.json")
             atomic_write_json(path, {"a": 1})
             assert read_json(path) == {"a": 1}
-            assert oct(os.stat(path).st_mode)[-3:] == "600"
+            if os.name != "nt":
+                # Windows has no POSIX mode bits; chmod there only toggles the
+                # read-only flag, so this assertion cannot hold by construction.
+                assert oct(os.stat(path).st_mode)[-3:] == "600"
 
     def test_read_json_missing_returns_default(self):
         assert read_json("/nonexistent/xyz.json", default={"x": 1}) == {"x": 1}
@@ -91,11 +95,20 @@ class TestDigestReader:
 
 
 class TestSubprocess:
+    """These use the current interpreter, not shell utilities.
+
+    ``echo`` and ``sleep`` are not programs on Windows — one is a cmd builtin and
+    the other does not exist — so a test written around them passes on Linux and
+    macOS and fails for every Windows user's build. ``sys.executable`` is the one
+    command guaranteed to exist wherever the tests run.
+    """
+
     def test_argv_is_not_shell_interpreted(self):
         # A classic injection payload must be treated as a literal argument.
-        result = run_process(["echo", "hello; rm -rf /"])
-        assert result.ok
-        assert "hello; rm -rf /" in result.stdout
+        payload = "hello; rm -rf /"
+        result = run_process([sys.executable, "-c", "import sys; print(sys.argv[1])", payload])
+        assert result.ok, result.stderr
+        assert payload in result.stdout
 
     def test_missing_tool_raises_tool_error(self):
         with pytest.raises(ToolExecutionError) as excinfo:
@@ -104,7 +117,7 @@ class TestSubprocess:
 
     def test_timeout_raises(self):
         with pytest.raises(ToolExecutionError):
-            run_process(["sleep", "5"], timeout=0.3)
+            run_process([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.3)
 
 
 class TestSafeFilename:

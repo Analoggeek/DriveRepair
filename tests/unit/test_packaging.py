@@ -132,3 +132,227 @@ class TestBuildScripts:
         assert any("windows" in str(spec.get("runs-on", "")) for spec in jobs.values())
         macos = jobs["macos"]
         assert "matrix" in macos["strategy"], "macOS must build both architectures"
+
+
+class TestTestSuitePortability:
+    """Guards against tests that only pass on the machine they were written on.
+
+    Two bugs already reached CI this way: a subprocess test that ran ``echo`` and
+    ``sleep`` (neither is a program on Windows) and async tests that waited a
+    fixed number of 20 ms ticks (a hidden ~6 s performance budget that a loaded
+    CI runner can miss).
+    """
+
+    TEST_FILES = sorted((ROOT / "tests").rglob("test_*.py"))
+
+    def test_no_shell_utilities_are_executed(self):
+        offenders = []
+        for path in self.TEST_FILES:
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if "run_process([" not in line:
+                    continue
+                for tool in ("echo", "sleep", "cat", "ls", "rm", "true"):
+                    if f'"{tool}"' in line:
+                        offenders.append(f"{path.name}:{number} runs POSIX tool {tool!r}")
+        assert not offenders, (
+            "use sys.executable instead of shell utilities (they do not exist on Windows):\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_no_fixed_iteration_waits(self):
+        """Waiting must be deadline-based, via tests.support.wait_for."""
+        import re
+
+        offenders = []
+        for path in self.TEST_FILES:
+            text = path.read_text(encoding="utf-8")
+            for match in re.finditer(r"for _ in range\((\d+)\)", text):
+                window = text[match.start() : match.start() + 400]
+                if "sleep" in window:
+                    line = text[: match.start()].count("\n") + 1
+                    offenders.append(f"{path.name}:{line}")
+        assert not offenders, (
+            "fixed-iteration sleeps encode a machine-speed assumption; "
+            "use tests.support.wait_for instead: " + ", ".join(offenders)
+        )
+
+    def test_support_helper_exists_and_is_used(self):
+        assert (ROOT / "tests/support.py").exists()
+        users = [p.name for p in self.TEST_FILES if "tests.support import" in p.read_text(encoding="utf-8")]
+        assert users, "no test uses the shared deadline-based wait helper"
+
+
+class TestReleaseBuilderOutput:
+    """The builder is driven by CI, so its output is a contract."""
+
+    def _run(self, *args):
+        import subprocess
+        import sys
+
+        return subprocess.run(
+            [sys.executable, str(ROOT / "tools/build_release.py"), *args],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+        )
+
+    def test_json_mode_emits_only_json_on_stdout(self):
+        """`--json > report.json` must produce a parseable file, failure included."""
+        import json
+        import platform
+
+        result = self._run("--json")
+        assert result.stdout.strip(), "nothing on stdout in --json mode"
+        document = json.loads(result.stdout)  # raises if progress logs leaked in
+        assert document["host"] == platform.system()
+        assert document["status"] in ("ok", "failed")
+
+    def test_unsupported_host_fails_with_a_clear_reason(self):
+        import json
+        import platform
+
+        if platform.system() in ("Windows", "Darwin"):
+            pytest.skip("this host can actually build")
+        result = self._run("--json")
+        assert result.returncode == 1
+        assert "cross-compile" in json.loads(result.stdout)["error"]
+        assert "release.yml" in result.stderr
+
+    def test_progress_goes_to_stderr_in_json_mode(self):
+        result = self._run("--json")
+        assert "==>" not in result.stdout
+
+
+class TestFailureReporting:
+    """This script is how a red CI build explains itself."""
+
+    SCRIPT = ROOT / ".github/scripts/report_failures.py"
+
+    def _run(self, *args):
+        import subprocess
+        import sys
+
+        return subprocess.run(
+            [sys.executable, str(self.SCRIPT), *args], capture_output=True, text=True
+        )
+
+    @staticmethod
+    def _junit(tmp_path, message="assert 404 == 200", with_file=True):
+        attributes = ' file="tests/integration/test_api.py"' if with_file else ""
+        xml = f'''<?xml version="1.0"?>
+<testsuites><testsuite name="pytest" tests="2" failures="1">
+  <testcase classname="tests.integration.test_api.TestApi" name="test_status"{attributes}>
+    <failure message="{message}">traceback</failure>
+  </testcase>
+  <testcase classname="tests.unit.test_ok" name="test_passes"/>
+</testsuite></testsuites>'''
+        path = tmp_path / "junit.xml"
+        path.write_text(xml)
+        return path
+
+    def test_a_failure_becomes_a_named_annotation(self, tmp_path):
+        result = self._run(str(self._junit(tmp_path)))
+        assert result.returncode == 0
+        assert "::error file=tests/integration/test_api.py::" in result.stdout
+        assert "TestApi.test_status" in result.stdout
+        assert "assert 404 == 200" in result.stdout
+
+    def test_passing_tests_are_not_annotated(self, tmp_path):
+        result = self._run(str(self._junit(tmp_path)))
+        assert "test_passes" not in result.stdout
+
+    def test_a_multiline_message_stays_on_one_line(self, tmp_path):
+        """A raw newline would truncate the workflow command mid-message."""
+        result = self._run(str(self._junit(tmp_path, message="line one&#10;line two")))
+        body = [line for line in result.stdout.splitlines() if line.startswith("::error")]
+        assert len(body) == 1, result.stdout
+        assert "line one" in body[0] and "line two" in body[0]
+
+    def test_percent_signs_are_escaped(self, tmp_path):
+        """GitHub decodes %XX in workflow commands; a bare % breaks the message."""
+        result = self._run(str(self._junit(tmp_path, message="usage was 90%")))
+        assert "%25" in result.stdout
+
+    def test_missing_report_is_itself_an_error(self, tmp_path):
+        result = self._run(str(tmp_path / "absent.xml"))
+        assert result.returncode == 1
+        assert "::error::" in result.stdout
+
+    def test_missing_file_attribute_is_tolerated(self, tmp_path):
+        result = self._run(str(self._junit(tmp_path, with_file=False)))
+        assert result.returncode == 0
+        assert "::error::FAILED" in result.stdout
+
+
+class TestCollectionErrorReporting:
+    """A collection error has an empty `message`; its text holds the reason."""
+
+    SCRIPT = ROOT / ".github/scripts/report_failures.py"
+
+    def test_the_traceback_is_reported_when_message_is_empty(self, tmp_path):
+        import subprocess
+        import sys
+
+        xml = '''<?xml version="1.0"?>
+<testsuites><testsuite name="pytest" errors="1" tests="1">
+  <testcase classname="" name="tests/integration/test_desktop.py">
+    <error message="">ImportError: libGL.so.1: cannot open shared object file</error>
+  </testcase>
+</testsuite></testsuites>'''
+        report = tmp_path / "junit.xml"
+        report.write_text(xml)
+        result = subprocess.run(
+            [sys.executable, str(self.SCRIPT), str(report)], capture_output=True, text=True
+        )
+        assert result.returncode == 0
+        assert "libGL.so.1" in result.stdout, result.stdout
+        assert "collection of tests/integration/test_desktop.py" in result.stdout
+
+
+class TestRunnerLabels:
+    """A retired runner label is invisible: the job queues and never starts.
+
+    That is exactly how this release was blocked. GitHub accepts a job for
+    ``macos-13`` and no runner ever claims it, so the run looks healthy and
+    pending instead of failing. ``macos-13`` was retired in December 2025 and
+    ``macos-14`` on 2 November 2026; the live Intel label is ``macos-15-intel``.
+    """
+
+    RETIRED = {"macos-12", "macos-13", "macos-14", "macos-13-large", "macos-14-large"}
+
+    def _workflows(self):
+        yaml = pytest.importorskip("yaml", reason="PyYAML not installed")
+        return {
+            path.name: yaml.safe_load(path.read_text())
+            for path in (ROOT / ".github/workflows").glob("*.yml")
+        }
+
+    def test_no_retired_macos_runner_labels(self):
+        offenders = []
+        for name, workflow in self._workflows().items():
+            for job_name, job in workflow.get("jobs", {}).items():
+                labels = [job.get("runs-on")]
+                for leg in (job.get("strategy", {}).get("matrix", {}).get("include") or []):
+                    labels.append(leg.get("runner"))
+                for label in labels:
+                    if isinstance(label, str) and label in self.RETIRED:
+                        offenders.append(f"{name}:{job_name} uses retired {label}")
+        assert not offenders, "\n".join(offenders)
+
+    def test_the_intel_macos_leg_uses_an_intel_label(self):
+        """macos-latest/macos-15 are arm64; requesting x64 on them builds the wrong arch."""
+        workflow = self._workflows()["release.yml"]
+        legs = workflow["jobs"]["macos"]["strategy"]["matrix"]["include"]
+        intel = [leg for leg in legs if leg["arch"] == "x64"]
+        assert len(intel) == 1, legs
+        assert "intel" in intel[0]["runner"], (
+            f"{intel[0]['runner']} is an arm64 image; the x64 build needs an -intel label"
+        )
+
+    def test_build_jobs_have_a_timeout(self):
+        """Without one, a stalled queue stays pending forever instead of going red."""
+        workflow = self._workflows()["release.yml"]
+        for job_name in ("windows", "macos"):
+            assert workflow["jobs"][job_name].get("timeout-minutes"), (
+                f"{job_name} has no timeout; a queued job can hang indefinitely"
+            )
