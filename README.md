@@ -23,6 +23,33 @@ hardware APIs of the operating system — no simulated results, no fabricated he
 | **Performance** | Per-block read benchmarking spread across the address space, rated against the device's real negotiated interface; counterfeit-capacity detection by write→read-back verification |
 | **Diagnosis** | Curated knowledge base of error codes and failure modes + deterministic assistant that explains the measured evidence and can only *order* operations the safety planner already approved |
 
+### Which devices it can actually repair
+
+"Repair" here means **rebuilding file-system metadata from authentic on-disk sources** — the
+backup boot sector, the redundant FAT, the GPT backup header. That fixes the drives that fail
+most often: ones whose data is intact but whose bookkeeping was corrupted by a pulled cable, a
+power cut, or a bad unmount. It does not and cannot rebuild data that is physically gone.
+
+| Storage device | Diagnose | Repair metadata | Recover files |
+| --- | --- | --- | --- |
+| USB flash drive, FAT32/exFAT (most sticks) | yes | **yes** — boot region, FSInfo, FAT mirror | yes, incl. deleted files |
+| USB flash drive, NTFS | yes | **yes** — boot sector from backup | carving only |
+| Memory card (SD/microSD), FAT32/exFAT | yes | **yes** | yes, incl. deleted files |
+| External HDD/SSD, NTFS/FAT/exFAT | yes | **yes** | yes (FAT/exFAT), carving (NTFS) |
+| External HDD/SSD, ext2/3/4 | yes | **no** — routed to `fsck` (`native-repair`) | carving only |
+| External drive, APFS / HFS+ | yes | **no** — routed to `diskutil repairVolume` (macOS) | carving only |
+| Windows/Linux boot disk, any layout | yes | **refused by policy** (system disk) | yes |
+| Any device with confirmed media damage | yes | **no repair offered** — advises replacement and recovery only | yes |
+| Counterfeit (fake-capacity) drive | yes | **no** — capacity is a lie; only recovery helps | yes |
+| Dead controller / drive not enumerating | **no** — the OS cannot see it | no | no |
+
+`ext4`, `APFS` and `HFS+` are diagnosed by this app but repaired by the platform's own tool,
+after explicit consent, because hand-writing journaled metadata is how you lose data. If that
+tool is missing, the app says so and stops; it does not substitute a guess.
+
+When the outcome is "this cannot be fixed in software", the app says that plainly and points
+at data recovery instead of offering a repair that would waste your time or your data.
+
 ### What it will never do
 
 - It will not claim to repair physically damaged NAND, worn-out flash or a dead controller.
