@@ -69,16 +69,21 @@ at data recovery instead of offering a repair that would waste your time or your
 
 ### Windows 10/11
 
-```powershell
-# From the built artifacts
-dist\USBDoctorAI-Setup-1.0.0.exe
-```
+Download `USBDoctorAI-Setup-1.0.0.exe` and run it. The installer is **fully
+offline**: it contains Python, Qt and the whole application, so no internet
+connection is needed to install or to run.
 
-Run as administrator — raw device access and SMART queries require elevation.
+Run the app as administrator — raw device access and SMART queries require
+elevation.
+
+Prefer no installation? `USBDoctorAI-1.0.0-portable.zip` is the same program,
+unpack and run `USBDoctorAI.exe`.
 
 ### macOS 11+
 
-Open `USBDoctorAI-1.0.0.dmg`, drag **USB Doctor AI** to *Applications*, then launch it.
+Download the disk image for your Mac — `USBDoctorAI-1.0.0-arm64.dmg` for Apple
+Silicon or `...-x64.dmg` for Intel — open it, drag **USB Doctor AI** to
+*Applications*, then launch it. Fully offline, like the Windows installer.
 macOS asks for permission the first time the app reads a removable volume — allow it.
 
 ### From source (any platform)

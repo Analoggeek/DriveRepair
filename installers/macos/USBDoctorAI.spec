@@ -3,12 +3,14 @@
 
 Build on macOS with:
 
-    arch -arm64 pyinstaller installers/macos/USBDoctorAI.spec -y     # Apple Silicon
+    arch -arm64  pyinstaller installers/macos/USBDoctorAI.spec -y    # Apple Silicon
     arch -x86_64 pyinstaller installers/macos/USBDoctorAI.spec -y    # Intel
-    python tools/make_universal.py                                   # lipo the two builds
 
-`tools/make_universal.py` merges the two architectures into one .app bundle and
-verifies the result with `lipo -info`.
+The produced .app is single-architecture: PyInstaller bundles the interpreter and
+the PySide6 Qt libraries it finds, so a universal binary requires universal2
+wheels for BOTH. `installers/macos/build.sh` builds the native architecture and
+reports it with `lipo -archs`; the CI matrix builds each architecture on its own
+runner and ships two DMGs rather than pretending one binary covers both.
 """
 
 from pathlib import Path
@@ -42,6 +44,14 @@ hiddenimports = [
     "usbdoctor.app.pages.settings",
     "usbdoctor.webapi.server",
     "usbdoctor.devices.macos",
+    # The main window imports its pages lazily, so PyInstaller's static
+    # analysis cannot see them; without these the frozen GUI fails at start-up.
+    "usbdoctor.app.theme",
+    "usbdoctor.app.widgets.common",
+    "usbdoctor.report",
+    "usbdoctor.knowledge.database",
+    "usbdoctor.knowledge.online",
+    "usbdoctor.ai.assistant",
 ]
 
 a = Analysis(  # noqa: F821

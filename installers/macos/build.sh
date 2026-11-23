@@ -49,11 +49,21 @@ ARCHS="$(lipo -archs dist/USBDoctorAI.app/Contents/MacOS/USBDoctorAI 2>/dev/null
 printf 'Bundle architecture: %s\n' "$ARCHS"
 
 step "Smoke-testing the bundle"
-if ./dist/USBDoctorAI.app/Contents/MacOS/USBDoctorAI status --json >/tmp/usbdoctor-smoke.json 2>/dev/null; then
-  echo "Frozen binary responded correctly."
-else
-  echo "WARNING: the frozen binary did not return a status; verify manually." >&2
-fi
+BIN="./dist/USBDoctorAI.app/Contents/MacOS/USBDoctorAI"
+"$BIN" status --json >/tmp/usbdoctor-smoke.json 2>/dev/null \
+  || fail "The frozen binary failed its status probe. Inspect $BIN directly."
+"$PY_BIN" - <<'JSON' || fail "The frozen binary did not return a valid status payload."
+import json, sys
+payload = json.load(open("/tmp/usbdoctor-smoke.json"))
+assert payload["app"] == "USB Doctor AI", payload
+print(f"CLI probe OK (app={payload['app']}, platform={payload['platform']}).")
+JSON
+
+# The GUI imports its pages lazily, so a missing module only appears at start-up.
+step "Smoke-testing the frozen GUI (offscreen)"
+QT_QPA_PLATFORM=offscreen "$BIN" selfcheck \
+  || fail "The frozen GUI self-check failed. The bundle cannot run on this architecture."
+echo "GUI probe OK: all pages constructed."
 
 if [[ $DO_SIGN -eq 1 ]]; then
   step "Signing"
@@ -63,7 +73,8 @@ if [[ $DO_SIGN -eq 1 ]]; then
   find "$APP/Contents" -type f -perm +111 -print0 2>/dev/null | while IFS= read -r -d '' bin; do
     case "$bin" in
       *.dylib|*.so|*/MacOS/*|*/Frameworks/*)
-        codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$bin" || true ;;
+        codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$bin" \
+          || fail "Signing $bin failed." ;;
     esac
   done
   codesign --force --deep --timestamp --options runtime \
@@ -91,8 +102,13 @@ else
   hdiutil create -volname "USB Doctor AI" -srcfolder dist/USBDoctorAI.app \
     -ov -format UDZO "dist/USBDoctorAI-1.0.0.dmg"
 fi
-codesign --force --timestamp --sign "${SIGN_IDENTITY:-adhoc-placeholder}" dist/USBDoctorAI-1.0.0.dmg 2>/dev/null || \
-  echo "DMG left unsigned (set SIGN_IDENTITY to sign it)."
+if [[ $DO_SIGN -eq 1 && -n "${SIGN_IDENTITY:-}" ]]; then
+  codesign --force --timestamp --sign "$SIGN_IDENTITY" "dist/USBDoctorAI-1.0.0.dmg" \
+    || fail "Signing the DMG failed."
+  codesign --verify --verbose=2 "dist/USBDoctorAI-1.0.0.dmg" || fail "The DMG signature did not verify."
+else
+  echo "DMG left unsigned (pass --sign with SIGN_IDENTITY to sign it)."
+fi
 
 if [[ $DO_SIGN -eq 1 ]]; then
   step "Notarizing"
@@ -109,3 +125,5 @@ step "Done"
 ls -lh dist/USBDoctorAI-1.0.0.dmg
 echo "App  : dist/USBDoctorAI.app"
 echo "CLI  : dist/USBDoctorAI.app/Contents/MacOS/USBDoctorAI status"
+echo "Self : dist/USBDoctorAI.app/Contents/MacOS/USBDoctorAI selfcheck"
+echo "DMG  : fully offline; move it to the target Mac by any means you like."

@@ -17,6 +17,56 @@ pip install -e ".[desktop,dev,package]"
 
 ---
 
+## The one command (recommended)
+
+On the target operating system:
+
+```bash
+python tools/build_release.py
+```
+
+That runs the tests, generates the icons, freezes the app with the platform
+PyInstaller spec, **verifies the frozen product with `selfcheck`**, then packages
+it. It exits non-zero on any failure — there is no "built with warnings" state.
+
+| Host | Produces |
+| --- | --- |
+| Windows | `dist/USBDoctorAI-Setup-1.0.0.exe` (Inno Setup), `dist/USBDoctorAI-1.0.0-x64-portable.zip`, `dist/USBDoctorAI/` |
+| macOS | `dist/USBDoctorAI-1.0.0-arm64.dmg` (Apple Silicon) or `...-x64.dmg` (Intel), `dist/USBDoctorAI-1.0.0-<arch>-portable.zip`, `dist/USBDoctorAI.app` |
+
+Useful flags: `--skip-tests` while iterating, `--portable-only` to skip the OS
+installer, `--json` for a machine-readable summary.
+
+**Every artifact is fully offline.** The installer, the portable zip and the disk
+image contain the interpreter, PySide6, the web frontend and the knowledge base.
+Nothing is downloaded during install or first run. The only optional network use
+is the allow-listed official-source research feature, and it can be turned off in
+Settings.
+
+### Why it cannot be cross-compiled
+
+PyInstaller bundles the host's Python interpreter and the host's Qt binaries, so
+a Windows `.exe` cannot be produced on Linux or macOS, and a `.dmg` cannot be
+produced anywhere but macOS. `tools/build_release.py` refuses to run on any other
+platform rather than emitting a half-built tree. For CI, use
+`.github/workflows/release.yml`, which builds each platform on its own runner.
+
+### Verifying a build
+
+```bash
+# inside the frozen product
+dist/USBDoctorAI/USBDoctorAI.exe selfcheck          # Windows
+dist/USBDoctorAI.app/Contents/MacOS/USBDoctorAI selfcheck   # macOS
+```
+
+It checks five things: the bundled web assets exist, every lazily-imported GUI
+module resolves, the desktop window constructs all ten pages, the engine and
+history database work in a scratch directory, and every CLI verb is registered.
+Both build scripts treat a failure here as fatal, and `ci.yml` runs it on every
+push so a broken package cannot reach a release.
+
+---
+
 ## Windows
 
 ```powershell
@@ -150,13 +200,17 @@ pyinstaller installers/USBDoctorAI.spec --noconfirm --clean
 
 ## Release checklist
 
-- [ ] `python -m pytest tests -q` is green (209 tests).
+- [ ] `python -m pytest tests -q` is green (241 tests).
 - [ ] `python tools/make_icons.py` regenerated after any logo change.
 - [ ] Version bumped in `usbdoctor/version.py` **and** in the installer scripts
       (`installers/windows/usbdoctor.iss`, both `.spec` bundles).
+- [ ] `python tools/build_release.py` completes (it runs the frozen `selfcheck`
+      itself, so a package missing a module cannot be released).
 - [ ] Windows: installer signed, verified with `signtool verify /pa`.
 - [ ] macOS: `codesign --verify --deep --strict`, `spctl --assess`, `stapler validate`.
-- [ ] Frozen binary smoke test passed on both platforms (`status --json`).
+- [ ] Frozen binary smoke test passed on both platforms (`selfcheck`).
+- [ ] Install with **no network connection** and confirm it launches (that is the
+      offline guarantee, and it is only true if it is tested).
 - [ ] Install, launch, scan a **known-good** drive, confirm the verdict is sensible.
 - [ ] Install on a clean VM with no Python present.
 - [ ] Uninstall leaves no services, drivers or scheduled tasks behind.

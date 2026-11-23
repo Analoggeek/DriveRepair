@@ -18,6 +18,7 @@ Every command maps 1:1 onto the same service calls the GUI uses, so behaviour
 from __future__ import annotations
 
 import argparse
+from argparse import _SubParsersAction
 import json
 import os
 import sys
@@ -116,7 +117,134 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--open", action="store_true", help="open a browser")
     serve.add_argument("--no-token", action="store_true", help="disable the session token (local only)")
+
+    sub.add_parser(
+        "selfcheck",
+        help="verify this installation end-to-end (used by the installers)",
+    ).add_argument("--json", action="store_true", dest="json")
     return parser
+
+
+def _selfcheck(*, json_out: bool = False) -> int:
+    """Prove an installation works: data files, engine, and the desktop pages.
+
+    Run by the Windows/macOS build scripts and by the installers after
+    installation. Everything is offline: no network, no device access, no writes
+    outside a temporary directory.
+    """
+    import importlib
+    import tempfile
+    from pathlib import Path
+
+    checks: list[tuple[str, bool, str]] = []
+
+    def check(name: str, fn) -> None:
+        try:
+            detail = fn()
+            checks.append((name, True, str(detail or "")))
+        except Exception as exc:  # report, never crash the self-check itself
+            checks.append((name, False, f"{type(exc).__name__}: {exc}"))
+
+    # 1. Bundled data files must be present inside the frozen bundle.
+    def packaged_data() -> str:
+        root = Path(__file__).resolve().parent
+        missing = [
+            name
+            for name in ("frontend/web/index.html", "frontend/web/app.css", "frontend/web/app.js")
+            if not (root / name).exists()
+        ]
+        if missing:
+            raise FileNotFoundError(f"missing packaged data: {', '.join(missing)}")
+        return "frontend assets present"
+
+    check("packaged data", packaged_data)
+
+    # 2. Every lazily-imported GUI page must resolve.
+    def gui_modules() -> str:
+        pages = [
+            "usbdoctor.app.main", "usbdoctor.app.main_window", "usbdoctor.app.theme",
+            "usbdoctor.app.widgets.common", "usbdoctor.app.pages.dashboard",
+            "usbdoctor.app.pages.devices", "usbdoctor.app.pages.scan",
+            "usbdoctor.app.pages.repair", "usbdoctor.app.pages.recovery",
+            "usbdoctor.app.pages.performance", "usbdoctor.app.pages.assistant",
+            "usbdoctor.app.pages.history", "usbdoctor.app.pages.reports",
+            "usbdoctor.app.pages.settings",
+        ]
+        for name in pages:
+            importlib.import_module(name)
+        return f"{len(pages)} GUI modules importable"
+
+    check("gui modules", gui_modules)
+
+    # 3. The desktop window must actually build (offscreen: no display needed).
+    def gui_window() -> str:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        from usbdoctor.app.main_window import MainWindow
+        from usbdoctor.service import DoctorService
+
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            window = MainWindow(DoctorService(state_dir=Path(tmp) / "state"), theme="dark")
+            count = len(window.pages)
+            window.close()
+            app.processEvents()
+        if count < 10:
+            raise RuntimeError(f"only {count} pages were constructed")
+        return f"{count} pages constructed"
+
+    check("desktop window", gui_window)
+
+    # 4. Engine + database must work in a scratch state directory.
+    def engine() -> str:
+        from usbdoctor.service import DoctorService
+
+        # Always a private scratch directory: the self-check must never create
+        # or touch the real state directory (it runs during installation).
+        saved = os.environ.pop("USBDOCTOR_STATE_DIR", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                status = DoctorService(state_dir=Path(tmp) / "state").status()
+        finally:
+            if saved is not None:
+                os.environ["USBDOCTOR_STATE_DIR"] = saved
+        if status.get("app") != "USB Doctor AI":
+            raise RuntimeError(f"unexpected status payload: {status.get('app')!r}")
+        return f"engine ok on {status['platform']}"
+
+    check("engine", engine)
+
+    # 5. Every CLI verb the launcher dispatches must exist.
+    def verbs() -> str:
+        known = {
+            "devices", "status", "scan", "plan", "repair", "image", "recover",
+            "capacity", "report", "research", "history", "serve", "selfcheck",
+        }
+        parser = build_parser()
+        actions = [
+            action for action in parser._actions if isinstance(action, _SubParsersAction)
+        ]
+        registered = set(actions[0].choices) if actions else set()
+        missing = known - registered
+        if missing:
+            raise RuntimeError(f"missing verbs: {', '.join(sorted(missing))}")
+        return f"{len(registered)} verbs registered"
+
+    check("cli verbs", verbs)
+
+    ok = all(passed for _, passed, _ in checks)
+    if json_out:
+        print(json.dumps({"ok": ok, "checks": [
+            {"name": n, "passed": p, "detail": d} for n, p, d in checks
+        ]}, indent=2))
+    else:
+        for name, passed, detail in checks:
+            print(f"  {'PASS' if passed else 'FAIL'}  {name:22} {detail}")
+        print("self-check:", "OK" if ok else "FAILED")
+    return EXIT_OK if ok else 1
 
 
 def _service(args: argparse.Namespace) -> DoctorService:
@@ -273,8 +401,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     color = (not args.no_color) and sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
     service: Optional[DoctorService] = None
     try:
-        service = _service(args)
         command = args.command
+
+        # selfcheck must not construct the service: doing so would create the
+        # user's state directory (and a history database) merely to prove the
+        # installation works. It uses its own scratch directory instead.
+        if command == "selfcheck":
+            return _selfcheck(json_out=getattr(args, "json", False))
+
+        service = _service(args)
 
         if command == "devices":
             return _print_devices(service, json_out=args.json, color=color)

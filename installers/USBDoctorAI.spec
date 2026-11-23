@@ -1,16 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec — Windows build.
 
-Produces a single-folder app plus a one-file executable:
+Produces a single-folder application (the form the installer ships):
 
-    pyinstaller installers/USBDoctorAI.spec --noconfirm
+    pyinstaller installers/USBDoctorAI.spec --noconfirm --clean
 
-Outputs:
-    dist/USBDoctorAI/USBDoctorAI.exe     (single-folder, fast start)
-    dist/USBDoctorAI.exe                 (one-file, easy distribution)
+Output:
+    dist/USBDoctorAI/USBDoctorAI.exe     (single-folder, fast start, what Inno Setup packages)
 
-The spec intentionally bundles the web frontend and knowledge data so the GUI
-does not need the source tree at runtime.
+A one-file build is deliberately NOT produced: PyInstaller cannot emit both a
+COLLECT directory and a differently-named one-file EXE from a single spec, and
+a one-file bundle would unpack to %TEMP% on every launch — unacceptable for a
+tool that must be run as administrator against raw disk devices.
 """
 
 import sys
@@ -45,6 +46,14 @@ hiddenimports = [
     "usbdoctor.app.pages.settings",
     "usbdoctor.webapi.server",
     "usbdoctor.devices.windows",
+    # The main window imports its pages lazily, so PyInstaller's static
+    # analysis cannot see them; without these the frozen GUI fails at start-up.
+    "usbdoctor.app.theme",
+    "usbdoctor.app.widgets.common",
+    "usbdoctor.report",
+    "usbdoctor.knowledge.database",
+    "usbdoctor.knowledge.online",
+    "usbdoctor.ai.assistant",
 ]
 
 a = Analysis(  # noqa: F821
@@ -90,7 +99,7 @@ exe = EXE(  # noqa: F821
     version=str(ROOT / "installers" / "windows" / "version_info.txt"),
 )
 
-# Also emit a single-folder build for faster start-up and easier patching.
+# Ship the single-folder build: this is what the installer packages.
 coll = COLLECT(  # noqa: F821
     exe,
     a.binaries,

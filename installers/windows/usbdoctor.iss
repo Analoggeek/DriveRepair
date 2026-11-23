@@ -7,10 +7,11 @@
 #define AppPublisher   "USB Doctor AI"
 #define AppURL         "https://github.com/Analoggeek/DriveRepair"
 #define AppExeName     "USBDoctorAI.exe"
-#define SourceDir      "..\..\dist\USBDoctorAI"
+#define ProjectRoot    "..\.."
+#define SourceDir      ProjectRoot + "\dist\USBDoctorAI"
 
 [Setup]
-AppId={{8F3B2C61-71A4-4C0E-9E7B-USBDOCTORAI01}
+AppId={{7A26301C-4A2B-550D-BA98-BB2A8515DF74}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -21,10 +22,10 @@ AppUpdatesURL={#AppURL}/releases
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-LicenseFile=..\..\LICENSE
-OutputDir=..\..\dist
+LicenseFile={#ProjectRoot + "\LICENSE"}
+OutputDir={#ProjectRoot + "\dist"}
 OutputBaseFilename=USBDoctorAI-Setup-{#AppVersion}
-SetupIconFile=..\..\usbdoctor\frontend\web\assets\app.ico
+SetupIconFile={#ProjectRoot + "\usbdoctor\frontend\web\assets\app.ico"}
 UninstallDisplayIcon={app}\{#AppExeName}
 Compression=lzma2/max
 SolidCompression=yes
@@ -52,9 +53,9 @@ Name: "quicklaunchicon"; Description: "Create a Quick Launch shortcut"; GroupDes
 Source: "{#SourceDir}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Documentation ships with the app so users have it offline.
-Source: "..\..\docs\*"; DestDir: "{app}\docs"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
-Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#ProjectRoot + "\docs\*"}"; DestDir: "{app}\docs"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "{#ProjectRoot + "\README.md"}"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#ProjectRoot + "\LICENSE"}"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
@@ -66,6 +67,8 @@ Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#AppName}"; Filen
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent runascurrentuser
 ; Optional smartmontools install (official, verified via hash before use).
 Filename: "https://www.smartmontools.org/"; Description: "Open the official smartmontools page (optional, for SMART data)"; Flags: shellexec postinstall unchecked
+; Prove the installed copy actually runs before the user is told it succeeded.
+Filename: "{app}\{#AppExeName}"; Parameters: "selfcheck"; StatusMsg: "Verifying the installation..."; Flags: runhidden waituntilterminated runascurrentuser; Check: WizardSilent = False
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\docs"
@@ -79,5 +82,27 @@ begin
   begin
     MsgBox('USB Doctor AI requires 64-bit Windows 10 or later.', mbError, MB_OK);
     Result := False;
+  end;
+end;
+
+{ Every file the application needs must be present in the package. A silently
+  empty installer is the worst possible outcome for an offline product, so the
+  build fails loudly here instead of shipping. }
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Missing: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    Missing := '';
+    if not FileExists(ExpandConstant('{app}\USBDoctorAI.exe')) then
+      Missing := Missing + 'USBDoctorAI.exe' + #13#10;
+    if not DirExists(ExpandConstant('{app}\_internal')) then
+      Missing := Missing + '_internal\ (bundled runtime)' + #13#10;
+    if not DirExists(ExpandConstant('{app}\docs')) then
+      Missing := Missing + 'docs\' + #13#10;
+    if Missing <> '' then
+      MsgBox('The installation is incomplete. These items are missing:' + #13#10#13#10 +
+             Missing + #13#10 + 'Please re-download the installer.', mbError, MB_OK);
   end;
 end;

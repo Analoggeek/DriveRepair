@@ -5,8 +5,7 @@
 .DESCRIPTION
     Produces:
         dist\USBDoctorAI\USBDoctorAI.exe   portable single-folder build
-        dist\USBDoctorAI.exe               portable one-file build
-        dist\USBDoctorAI-Setup-1.0.0.exe   Inno Setup installer
+        dist\USBDoctorAI-Setup-1.0.0.exe   Inno Setup installer (offline, self-contained)
 
     Requirements
         Python 3.9+ 64-bit on PATH (py -3)
@@ -68,26 +67,71 @@ Write-Step "Generating icons"
 & $venvPython tools\make_icons.py
 
 Write-Step "Building the executable"
-if (Test-Path "build") { Remove-Item "build" -Recurse -Force }
-if (Test-Path "dist") { Remove-Item "dist" -Recurse -Force }
+foreach ($dir in @("build", "dist", "build-probe", "dist-probe")) {
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+}
 & $venvPython -m PyInstaller installers\USBDoctorAI.spec --noconfirm --clean
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
 
 Write-Host ""
 Write-Host "Built:" -ForegroundColor Green
-Get-ChildItem dist -Filter "USBDoctorAI*" | ForEach-Object {
-    Write-Host ("  {0}  ({1:N1} MB)" -f $_.Name, ((Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB))
+$bundle = "dist\USBDoctorAI"
+if (-not (Test-Path "$bundle\USBDoctorAI.exe")) {
+    throw "PyInstaller did not produce $bundle\USBDoctorAI.exe"
 }
+$sizeMb = (Get-ChildItem $bundle -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
+Write-Host ("  dist\USBDoctorAI\  ({0:N1} MB)" -f $sizeMb)
 
 # Smoke test: the CLI must answer without a GUI session.
-Write-Step "Smoke-testing the frozen binary"
-$probe = & "dist\USBDoctorAI\USBDoctorAI.exe" status --json 2>&1
+# The shipped executable is built with console=False, so it has no stdout to
+# capture — that is correct for a GUI product but useless for automation. Build
+# a second, console-enabled copy from the same source and run the probes against
+# it, then run the real (windowed) executable for the GUI check by exit code.
+Write-Step "Building the console probe executable"
+$probeArgs = @(
+    "-m", "PyInstaller", "launcher.py",
+    "--name", "USBDoctorAIConsole",
+    "--console", "--onefile", "--noconfirm", "--clean",
+    "--distpath", "dist-probe", "--workpath", "build-probe",
+    "--paths", ".",
+    "--add-data", "usbdoctor/frontend/web/index.html;usbdoctor/frontend/web",
+    "--add-data", "usbdoctor/frontend/web/app.css;usbdoctor/frontend/web",
+    "--add-data", "usbdoctor/frontend/web/app.js;usbdoctor/frontend/web",
+    "--add-data", "usbdoctor/frontend/web/assets;usbdoctor/frontend/web/assets",
+    "--exclude-module", "tkinter"
+)
+& $venvPython @probeArgs 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "The console probe executable could not be built." }
+$probeExe = "dist-probe\USBDoctorAIConsole.exe"
+
+Write-Step "Smoke-testing the frozen engine (console build)"
+$probe = & $probeExe selfcheck --json 2>&1
 if ($LASTEXITCODE -ne 0) {
-    Write-Warning "The frozen binary did not return a status; inspect it manually before shipping."
-    Write-Host $probe
-} else {
-    Write-Host "Frozen binary responded correctly."
+    throw "The frozen self-check failed (exit $LASTEXITCODE):`n$probe"
 }
+try {
+    $json = $probe | ConvertFrom-Json
+} catch {
+    throw "The frozen binary returned output that is not JSON:`n$probe"
+}
+if (-not $json.ok) {
+    throw "The frozen self-check reported a failure:`n$probe"
+}
+foreach ($check in $json.checks) {
+    Write-Host ("  {0}  {1}" -f $(if ($check.passed) { "PASS" } else { "FAIL" }), $check.name)
+}
+
+# And confirm the *shipped* windowed build starts and completes the same checks,
+# judged by exit code alone (it cannot write to our console).
+Write-Step "Smoke-testing the shipped GUI build (offscreen)"
+$env:QT_QPA_PLATFORM = "offscreen"
+& "dist\USBDoctorAI\USBDoctorAI.exe" selfcheck | Out-Null
+$guiExit = $LASTEXITCODE
+Remove-Item Env:\QT_QPA_PLATFORM
+if ($guiExit -ne 0) {
+    throw "The shipped GUI build failed its self-check (exit $guiExit)."
+}
+Write-Host "Shipped build OK."
 
 if ($Sign) {
     Write-Step "Signing binaries"
@@ -98,7 +142,8 @@ if ($Sign) {
     if (-not $env:CODESIGN_CERT) {
         throw "Set `$env:CODESIGN_CERT to the certificate thumbprint (or full /f argument) before signing."
     }
-    $files = @("dist\USBDoctorAI\USBDoctorAI.exe", "dist\USBDoctorAI.exe")
+    $files = @("dist\USBDoctorAI\USBDoctorAI.exe")
+    # Never ship a signed app next to an unsigned probe or vice versa.
     foreach ($file in $files) {
         if (Test-Path $file) {
             & signtool.exe sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 `
@@ -122,12 +167,21 @@ if (-not $SkipInstaller) {
     } else {
         & $iscc "installers\windows\usbdoctor.iss"
         if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed." }
-        Get-ChildItem dist -Filter "*Setup*.exe" | ForEach-Object {
-            Write-Host ("  installer: {0}  ({1:N1} MB)" -f $_.Name, ($_.Length / 1MB)) -ForegroundColor Green
+        $installer = Get-ChildItem dist -Filter "*Setup*.exe" | Select-Object -First 1
+        if (-not $installer) { throw "Inno Setup reported success but no installer appeared in dist\." }
+        if ($Sign) {
+            Write-Step "Signing the installer"
+            & signtool.exe sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 `
+                /sha1 $env:CODESIGN_CERT $installer.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Signing the installer failed." }
+            & signtool.exe verify /pa $installer.FullName
+            if ($LASTEXITCODE -ne 0) { throw "The installer signature did not verify." }
         }
+        Write-Host ("  installer: {0}  ({1:N1} MB)" -f $installer.Name, ($installer.Length / 1MB)) -ForegroundColor Green
     }
 }
 
 Write-Step "Done"
 Write-Host "Portable: dist\USBDoctorAI\USBDoctorAI.exe"
 Write-Host "CLI     : dist\USBDoctorAI\USBDoctorAI.exe status"
+if (-not $SkipInstaller) { Write-Host "Installer: dist\USBDoctorAI-Setup-*.exe  (fully offline)" }
