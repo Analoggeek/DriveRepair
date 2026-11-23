@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>USB Doctor AI — Intelligent Storage Diagnosis, Repair &amp; Recovery</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app" class="app" aria-busy="true">
+  <!-- ───────────────────────────── sidebar ───────────────────────────── -->
+  <aside class="sidebar" aria-label="Main navigation">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>
+          <circle cx="12" cy="12" r="4.2"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <strong>USB Doctor<span> AI</span></strong>
+        <small id="brandVersion">v—</small>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button class="nav-item" data-page="dashboard"><span class="nav-ico">◉</span>Dashboard</button>
+      <button class="nav-item" data-page="devices"><span class="nav-ico">▤</span>Devices</button>
+      <button class="nav-item" data-page="scan"><span class="nav-ico">◎</span>Health Scan</button>
+      <button class="nav-item" data-page="repair"><span class="nav-ico">✚</span>Repair Center</button>
+      <button class="nav-item" data-page="recovery"><span class="nav-ico">⟲</span>Data Recovery</button>
+      <button class="nav-item" data-page="performance"><span class="nav-ico">⚡</span>Performance</button>
+      <button class="nav-item" data-page="assistant"><span class="nav-ico">✦</span>AI Assistant</button>
+      <button class="nav-item" data-page="history"><span class="nav-ico">☰</span>History</button>
+      <button class="nav-item" data-page="reports"><span class="nav-ico">▦</span>Reports</button>
+      <button class="nav-item" data-page="settings"><span class="nav-ico">⚙</span>Settings</button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="pill" id="adminPill">checking rights…</div>
+      <button class="theme-toggle" id="themeToggle" title="Toggle dark / light theme">
+        <span id="themeIcon">◐</span><span id="themeLabel">Dark</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ───────────────────────────── main ───────────────────────────── -->
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="pageTitle">Dashboard</h1>
+        <p id="pageSub" class="muted">Connect a drive and start with a read-only health scan.</p>
+      </div>
+      <div class="topbar-actions">
+        <div class="conn-dot" id="connDot" title="Connecting…"></div>
+        <button class="btn ghost" id="refreshBtn">Refresh devices</button>
+        <button class="btn primary" id="autoBtn" title="Scan the selected drive and apply only automatically-safe repairs">
+          Scan &amp; Repair Automatically
+        </button>
+      </div>
+    </header>
+
+    <div id="banner" class="banner hidden" role="status"></div>
+
+    <!-- ───────────────────────── dashboard ───────────────────────── -->
+    <section class="page" id="page-dashboard">
+      <div class="grid cols-3" id="statCards">
+        <div class="card stat"><span class="stat-label">Devices connected</span><strong class="stat-value" id="statDevices">—</strong></div>
+        <div class="card stat"><span class="stat-label">Scans recorded</span><strong class="stat-value" id="statScans">—</strong></div>
+        <div class="card stat"><span class="stat-label">Repairs completed</span><strong class="stat-value" id="statRepairs">—</strong></div>
+      </div>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <div class="card-head"><h2>Selected drive</h2><span class="badge" id="selectedBadge">none</span></div>
+          <div id="heroDevice" class="hero-empty">
+            <p class="muted">No drive selected. Pick one from <strong>Devices</strong>.</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>What this app can and cannot do</h2></div>
+          <ul class="truth-list">
+            <li class="ok">Recovers files from deleted, formatted and RAW volumes — working on a copy, never the original.</li>
+            <li class="ok">Repairs file-system metadata (boot sectors, FAT mirrors, GPT backups, FSInfo).</li>
+            <li class="ok">Detects counterfeit capacity, failing flash and USB link errors from real evidence.</li>
+            <li class="no">Cannot restore physically worn-out NAND or raise a drive's lifespan.</li>
+            <li class="no">Cannot make a dead controller work — that needs hardware recovery.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Connected devices</h2><span class="muted small" id="deviceSource"></span></div>
+        <div id="dashDevices" class="device-strip"><p class="muted">Loading…</p></div>
+      </div>
+    </section>
+
+    <!-- ────────────────────────── devices ────────────────────────── -->
+    <section class="page hidden" id="page-devices">
+      <div class="card">
+        <div class="card-head">
+          <h2>Storage devices</h2>
+          <div class="filters">
+            <label class="check"><input type="checkbox" id="showInternal"> show internal disks</label>
+            <button class="btn ghost small" id="deviceRefresh">Rescan devices</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="deviceTable">
+            <thead><tr>
+              <th>Drive</th><th>Capacity</th><th>Interface</th><th>File system</th>
+              <th>SMART</th><th>Writable</th><th></th>
+            </tr></thead>
+            <tbody><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div id="deviceWarnings" class="warn-list"></div>
+      </div>
+    </section>
+
+    <!-- ────────────────────────── scan ────────────────────────── -->
+    <section class="page hidden" id="page-scan">
+      <div class="card">
+        <div class="card-head"><h2>Health scan</h2><span class="badge" id="scanMode">smart</span></div>
+        <div class="scan-controls">
+          <div class="field">
+            <label for="scanDevice">Device</label>
+            <select id="scanDevice" class="input"></select>
+          </div>
+          <div class="field">
+            <label for="scanModeSel">Mode</label>
+            <select id="scanModeSel" class="input">
+              <option value="safe">SAFE — read-only checks</option>
+              <option value="smart" selected>SMART REPAIR — safe fixes included</option>
+              <option value="advanced">ADVANCED — everything, each step confirmed</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="scanBudget">Surface scan time budget</label>
+            <select id="scanBudget" class="input">
+              <option value="60">1 minute</option>
+              <option value="300" selected>5 minutes</option>
+              <option value="900">15 minutes</option>
+              <option value="0">Full scan (may take hours)</option>
+            </select>
+          </div>
+          <button class="btn primary" id="startScan">Start scan</button>
+        </div>
+        <div class="progress-wrap hidden" id="scanProgressWrap">
+          <div class="progress"><div class="progress-bar" id="scanProgressBar"></div></div>
+          <div class="progress-meta"><span id="scanStage">starting…</span><span id="scanPercent">0%</span></div>
+        </div>
+        <details class="steps-detail">
+          <summary>The 10-step workflow this scan follows</summary>
+          <ol class="steps" id="workflowSteps">
+            <li>Detect the device and read its identity</li>
+            <li>Identify the controller, interface and real capacity</li>
+            <li>Scan metadata and surface for errors</li>
+            <li>Analyse error codes against the knowledge base</li>
+            <li>Research the exact model on official sources</li>
+            <li>Compare repair procedures and pick the safest</li>
+            <li>Back up / image the device before any write</li>
+            <li>Apply only verified-safe repairs</li>
+            <li>Verify the result by re-reading and re-checking</li>
+            <li>Produce the report</li>
+          </ol>
+        </details>
+      </div>
+      <div id="scanResult"></div>
+    </section>
+
+    <!-- ────────────────────────── repair ────────────────────────── -->
+    <section class="page hidden" id="page-repair">
+      <div class="card">
+        <div class="card-head"><h2>Repair Center</h2><span class="badge" id="repairMode">smart</span></div>
+        <p class="muted">
+          Only operations that the planner matched to real evidence are listed. Every write needs your
+          approval, and each one creates a rollback file first.
+        </p>
+        <div class="repair-controls">
+          <select id="repairDevice" class="input"></select>
+          <select id="repairModeSel" class="input">
+            <option value="safe">SAFE</option>
+            <option value="smart" selected>SMART REPAIR</option>
+            <option value="advanced">ADVANCED</option>
+          </select>
+          <button class="btn ghost" id="loadPlans">Load repair plan</button>
+          <button class="btn ghost" id="dryRunBtn" disabled>Dry run</button>
+          <button class="btn primary" id="approveBtn" disabled>Approve &amp; repair</button>
+        </div>
+        <div id="planList" class="plan-list"><p class="muted">Load a plan to see what applies to this drive.</p></div>
+        <div id="repairResult"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Emergency failure detection</h2></div>
+        <p class="muted">When a drive has permanently failed, this is what the user sees — no false hope, no invented fixes.</p>
+        <div class="failure-card" id="failureCard">
+          <div class="failure-face">😅</div>
+          <div>
+            <strong>Bhai, is pendrive ne apni duty kaafi kar li hai!</strong>
+            <p class="muted small">This message appears only when SMART, media errors or capacity evidence
+              genuinely confirm permanent hardware failure. Suspected failures are reported as suspected.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ────────────────────────── recovery ────────────────────────── -->
+    <section class="page hidden" id="page-recovery">
+      <div class="card">
+        <div class="card-head"><h2>Data Recovery</h2></div>
+        <div class="grid cols-2">
+          <div>
+            <h3>1. Image the device first</h3>
+            <p class="muted small">A resumable sector image is the safest base for any recovery. It never writes to the source.</p>
+            <div class="field"><label for="imageOut">Image destination</label>
+              <input class="input" id="imageOut" placeholder="/home/you/recovered/drive.img"></div>
+            <button class="btn primary" id="imageBtn">Create image</button>
+          </div>
+          <div>
+            <h3>2. Recover files</h3>
+            <p class="muted small">Walk the file system for original names (deleted entries included), or carve by content when metadata is gone.</p>
+            <div class="field"><label for="recoveryMethod">Method</label>
+              <select class="input" id="recoveryMethod">
+                <option value="auto">Automatic (file system, then carving)</option>
+                <option value="filesystem">File-system walk (keeps names)</option>
+                <option value="carve">Content carving (metadata-free)</option>
+              </select></div>
+            <div class="field"><label for="recoveryOut">Output folder</label>
+              <input class="input" id="recoveryOut" placeholder="leave empty for the app data folder"></div>
+            <label class="check"><input type="checkbox" id="includeDeleted" checked> include deleted entries</label>
+            <button class="btn primary" id="recoverBtn">Recover files</button>
+          </div>
+        </div>
+        <div class="progress-wrap hidden" id="recoveryProgress"><div class="progress"><div class="progress-bar" id="recoveryBar"></div></div>
+          <div class="progress-meta"><span id="recoveryStage">working…</span><span id="recoveryPct">0%</span></div></div>
+        <div id="recoveryResult"></div>
+      </div>
+    </section>
+
+    <!-- ──────────────────────── performance ──────────────────────── -->
+    <section class="page hidden" id="page-performance">
+      <div class="grid cols-2">
+        <div class="card">
+          <div class="card-head"><h2>Read performance</h2></div>
+          <p class="muted small">Samples are spread across the whole device, not just the first megabyte, so a fake fast cache cannot hide a slow drive.</p>
+          <div id="perfResult"><p class="muted">Run a scan on a device to measure its speed.</p></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Capacity verification</h2></div>
+          <p class="muted small">
+            Writes a pattern file, verifies it by reading it back and always deletes it.
+            This proves whether the drive really stores what it claims — the only reliable
+            way to detect a counterfeit.
+          </p>
+          <label class="check"><input type="checkbox" id="capacityConsent">
+            I understand this writes and deletes temporary test data on the drive</label>
+          <button class="btn primary" id="capacityBtn">Verify real capacity</button>
+          <div id="capacityResult"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── assistant ───────────────────────── -->
+    <section class="page hidden" id="page-assistant">
+      <div class="card">
+        <div class="card-head"><h2>AI diagnostic assistant</h2><span class="badge" id="aiConfidence">—</span></div>
+        <p class="muted small">
+          This assistant explains the evidence your drive produced. It cannot invent a repair,
+          cannot run one, and says "unavailable" when the hardware reports nothing.
+        </p>
+        <div id="assistantBody"><p class="muted">Run a scan to get a diagnosis.</p></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Official source research</h2>
+          <button class="btn ghost small" id="researchBtn" disabled>Research this model</button></div>
+        <div id="researchBody"><p class="muted small">Uses only allow-listed HTTPS vendor and standards pages, and always shows the URL.</p></div>
+      </div>
+    </section>
+
+    <!-- ────────────────────────── history ────────────────────────── -->
+    <section class="page hidden" id="page-history">
+      <div class="card">
+        <div class="card-head"><h2>Scan history</h2><button class="btn ghost small" id="historyRefresh">Refresh</button></div>
+        <div class="table-wrap"><table class="table" id="historyTable">
+          <thead><tr><th>When</th><th>Device</th><th>Verdict</th><th>Mode</th><th></th></tr></thead>
+          <tbody><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Repairs performed</h2></div>
+        <div class="table-wrap"><table class="table" id="repairHistoryTable">
+          <thead><tr><th>When</th><th>Operation</th><th>Risk</th><th>Status</th><th>Verified</th></tr></thead>
+          <tbody><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- ────────────────────────── reports ────────────────────────── -->
+    <section class="page hidden" id="page-reports">
+      <div class="card">
+        <div class="card-head"><h2>Health report</h2>
+          <div class="filters">
+            <button class="btn ghost small" id="reportMd">Markdown</button>
+            <button class="btn ghost small" id="reportHtml">HTML</button>
+          </div>
+        </div>
+        <pre class="report-pre" id="reportBody">Run a scan, then generate a report.</pre>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── settings ───────────────────────── -->
+    <section class="page hidden" id="page-settings">
+      <div class="grid cols-2">
+        <div class="card">
+          <div class="card-head"><h2>Safety</h2></div>
+          <label class="check"><input type="checkbox" id="setInternal"> allow internal disks <span class="muted small">(system disk is always refused)</span></label>
+          <label class="check"><input type="checkbox" id="setOffline"> offline mode <span class="muted small">(no network research)</span></label>
+          <label class="check"><input type="checkbox" id="setMounted"> allow repairs on mounted volumes <span class="muted small">(not recommended)</span></label>
+          <p class="muted small">These map to the same policy object the repair executor enforces — the UI cannot bypass them.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>External tools (detected)</h2></div>
+          <div id="toolsList" class="tools-list"><p class="muted">Loading…</p></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>About &amp; limits</h2></div>
+        <div id="aboutBody" class="muted small"></div>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <span>USB Doctor AI — every result comes from your hardware. Unavailable data is reported as unavailable.</span>
+    </footer>
+  </main>
+</div>
+
+<!-- Approve dialog -->
+<dialog id="approveDialog" class="dialog">
+  <h2>Approve these operations?</h2>
+  <ul id="approveList" class="approve-list"></ul>
+  <p class="muted small">A rollback copy is written before each change. You can stop at any time.</p>
+  <div class="dialog-actions">
+    <button class="btn ghost" id="approveCancel">Cancel</button>
+    <button class="btn danger" id="approveConfirm">I understand — repair</button>
+  </div>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>
