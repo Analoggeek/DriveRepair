@@ -159,9 +159,12 @@ class MacDeviceProvider:
                 device.serial = usb.get("serial")
             device.native["usb"] = usb
         if device.usb_speed is None and device.is_usb:
-            speed = self._usb_speed_via_iokit(identifier)
-            if speed:
-                device.usb_speed = speed
+            # system_profiler already reports the negotiated link speed
+            # exactly; no extra IOKit walk is needed (or implemented).
+            if not device.usb_speed:
+                device.limitations.append(
+                    "The negotiated USB link speed was not reported for this device."
+                )
         return device
 
     def _attach_partitions(
@@ -290,17 +293,6 @@ class MacDeviceProvider:
         if serial:
             info["serial"] = serial.group(1).strip()
         return info
-
-    def _usb_speed_via_iokit(self, identifier: str) -> Optional[str]:
-        """Read kIOUSBHostDevicePropertyDeviceSpeed through IOKit for exactness."""
-        try:
-            iokit = ctypes.CDLL(ctypes.util.find_library("IOKit"))
-        except (OSError, TypeError):
-            return None
-        # A full IORegistry walk needs dozens of C calls; the documented
-        # `system_profiler` value is already exact, so use it when available.
-        return None
-
 
 # ---------------------------------------------------------------------------
 # helpers

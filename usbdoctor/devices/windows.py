@@ -177,8 +177,10 @@ class WindowsDeviceProvider:
                 "SD": "mmc",
             }.get(bus.upper(), bus.lower())
 
-    def _fill_from_storage_reliability(self, device: DeviceRef, number: int) -> None:
-        info = storage_reliability(device.path)
+    def _fill_from_storage_reliability(self, device: DeviceRef, number: int, info: Optional[dict] = None) -> None:
+        """Apply MSFT_StorageReliabilityCounter data already fetched for this disk."""
+        if info is None:
+            info = storage_reliability(device.path)
         if not info:
             return
         if info.get("temperature") is not None:
@@ -186,6 +188,19 @@ class WindowsDeviceProvider:
                 device.temperature_c = float(info["temperature"])
             except (TypeError, ValueError):
                 pass
+        # The reliability counter also carries wear and media-error totals. Keep
+        # them as evidence (health evaluation can use a real reason instead of
+        # guessing) and surface a one-line hint for the device list.
+        device.native["reliability"] = info
+        hints: list[str] = []
+        wear = info.get("wear")
+        if isinstance(wear, (int, float)) and wear >= 0:
+            hints.append(f"wear {wear:g}%")
+        uncorrected = info.get("read_errors_uncorrected")
+        if isinstance(uncorrected, (int, float)) and uncorrected > 0:
+            hints.append(f"{int(uncorrected)} uncorrected read error(s)")
+        if hints and not device.health_hint:
+            device.health_hint = ", ".join(hints)
 
     def _attach_partitions(self, device: DeviceRef, warnings: list[str]) -> None:
         number = device.path.rsplit("PhysicalDrive", 1)[-1]

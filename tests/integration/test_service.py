@@ -504,3 +504,30 @@ class TestServiceStatus:
         assert listing["platform"] in ("linux", "windows", "macos")
         assert isinstance(listing["is_admin"], bool)
         assert "allow_internal_disks" in listing["policy"]
+
+
+class TestSmartHonesty:
+    """SMART must be reported as unavailable, never invented."""
+
+    def test_read_smart_without_smartctl_is_honest(self):
+        from usbdoctor.analysis.smart.reader import read_smart
+
+        for path, bus in (
+            ("/dev/does-not-exist-smart-test", "usb"),
+            ("/dev/vda", "sata"),
+        ):
+            result = read_smart(path, bus=bus, deep_usb=True)
+            assert result.available is False, f"{path} must not claim SMART"
+            assert result.reason, f"{path} must give a reason"
+            assert result.attributes == [], "attributes must not be fabricated"
+            assert result.health_passed is None, "health must not be fabricated"
+            # And the record must survive JSON round-trip for the API/report.
+            payload = result.to_dict()
+            assert payload["available"] is False
+            assert payload["reason"]
+
+    def test_scan_records_the_unavailable_reason_as_a_limitation(self, service, fat_image):
+        path, _ = fat_image
+        result = service.scan(str(path), ScanOptions(mode="safe", surface_time_budget_s=2))
+        assert result.smart is None  # images have no hardware behind them
+        assert any("SMART cannot be read" in note for note in result.limitations)
