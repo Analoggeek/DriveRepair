@@ -17,6 +17,8 @@ jobs:
   tests:
     name: Tests (Python ${{ matrix.python }} on ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # A stuck step must go red, not hold a runner for six hours.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -103,11 +105,21 @@ jobs:
       - name: Desktop UI tests
         env:
           QT_QPA_PLATFORM: offscreen
+          PYTHONUNBUFFERED: "1"
         shell: bash
+        # The suite takes half an hour on a Windows runner. Without a ceiling a
+        # single stuck test holds the job open until the six-hour default, which
+        # is how one stuck packaging test turned into a ninety-minute job.
+        timeout-minutes: 45
         run: |
-          set -o pipefail
-          python -m pytest tests -q --tb=short -ra \
-            --junitxml=junit-ui.xml 2>&1 | tee pytest-ui.log
+          # Redirect instead of piping through tee: a test that leaves a child
+          # process holding stdout keeps the pipe open long after pytest exits,
+          # and the log - the only thing that explains a failure - never flushes.
+          python -u -m pytest tests -q --tb=short -ra --durations=15 \
+            --timeout=180 --timeout-method=thread \
+            --junitxml=junit-ui.xml > pytest-ui.log 2>&1 || status=$?
+          tail -c 3000 pytest-ui.log
+          exit "${status:-0}"
 
       - name: Report UI failures
         if: failure()
@@ -127,6 +139,8 @@ jobs:
   package:
     name: Packaged self-check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # A stuck step must go red, not hold a runner for six hours.
+    timeout-minutes: 60
     needs: tests
     strategy:
       fail-fast: false
