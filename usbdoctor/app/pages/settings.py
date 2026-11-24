@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QGridLayout,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from usbdoctor.app import icons
 from usbdoctor.app.widgets.common import Badge, Card, InfoBanner, label
 from usbdoctor.service.engine import DoctorService
 from usbdoctor.version import APP_NAME, APP_TAGLINE, __version__
@@ -106,6 +107,32 @@ class SettingsPage(QWidget):
         privacy.add(self.storage_label)
         layout.addWidget(privacy)
 
+        updates = Card("Updates")
+        updates.add(label(
+            f"You are running version <b>{__version__}</b>. Checking for a newer release is "
+            "the only thing in this application that uses a network — everything else works "
+            "with the cable unplugged.",
+            wrap=True,
+        ))
+        self.update_status = label(
+            "Not checked yet.", name="UpdateStatus",
+        )
+        updates.add(self.update_status)
+        self.startup_check = QCheckBox("Look for updates when the application starts")
+        self.startup_check.stateChanged.connect(self.save_updates)
+        updates.add(self.startup_check)
+        self.notify_updates = QCheckBox("Tell me when a newer version becomes available")
+        self.notify_updates.setChecked(True)
+        self.notify_updates.stateChanged.connect(self.save_updates)
+        updates.add(self.notify_updates)
+        self.update_button = QPushButton("Check for an update now")
+        self.update_button.setObjectName("Primary")
+        self.update_button.setIconSize(QSize(15, 15))
+        self.update_button.setCursor(Qt.PointingHandCursor)
+        self.update_button.clicked.connect(self.open_updates)
+        updates.add_header_widget(self.update_button)
+        layout.addWidget(updates)
+
         about = Card(f"About {APP_NAME.replace(chr(38), chr(38) * 2)}")
         about.add(label(f"<b>{APP_NAME}</b> {__version__} — {APP_TAGLINE}", wrap=True))
         limits = [
@@ -161,12 +188,43 @@ class SettingsPage(QWidget):
             "good" if status["is_admin"] else "warn",
         )
 
+    def reload_updates(self, check: object = None) -> None:
+        """Show the saved preference, and the outcome of the last check if there is one."""
+        self.startup_check.blockSignals(True)
+        self.startup_check.setChecked(
+            bool(self.service.history.get_setting("check_updates_on_start", False))
+        )
+        self.startup_check.blockSignals(False)
+        self.notify_updates.blockSignals(True)
+        self.notify_updates.setChecked(
+            bool(self.service.history.get_setting("notify_updates", True))
+        )
+        self.notify_updates.blockSignals(False)
+        if check is not None:
+            message = getattr(check, "message", "")
+            self.update_status.setText(message or "Not checked yet.")
+        self.update_button.setIcon(icons.icon("update", 15))
+
     def save(self) -> None:
         self.service.set_setting("allow_internal_disks", self.internal_check.isChecked())
         self.service.set_setting("allow_mounted_write", self.mounted_check.isChecked())
         self.service.set_setting("offline_mode", self.offline_check.isChecked())
         self.service.set_setting("auto_backup_before_repair", self.backup_check.isChecked())
         self.banner.show_message("Settings saved and applied to the safety policy.", "ok")
+
+    def save_updates(self) -> None:
+        self.service.set_setting("check_updates_on_start", self.startup_check.isChecked())
+        self.service.set_setting("notify_updates", self.notify_updates.isChecked())
+
+    def open_updates(self) -> None:
+        """Open the update dialog from the window, which owns the theme and the toast."""
+        window = self.window()
+        if hasattr(window, "open_update_dialog"):
+            window.open_update_dialog()
+            return
+        from usbdoctor.app.updates_ui import UpdateDialog  # pragma: no cover - standalone use
+
+        UpdateDialog(self.service, parent=self).exec()
 
     def purge_history(self) -> None:
         from PySide6.QtWidgets import QMessageBox
@@ -190,3 +248,5 @@ class SettingsPage(QWidget):
 
     def on_shown(self) -> None:
         self.reload()
+        window = self.window()
+        self.reload_updates(getattr(window, "latest_check", None))

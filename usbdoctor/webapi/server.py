@@ -140,6 +140,7 @@ class ApiApp:
             ("GET", "/api/events"): self.get_events,
             ("GET", "/api/events/poll"): self.poll_events,
             ("GET", "/api/report"): self.get_report,
+            ("GET", "/api/update/check"): self.get_update_check,
             ("GET", "/api/token"): self.get_token,
         }
 
@@ -506,6 +507,13 @@ class ApiApp:
         self.service.history.purge_device(path)
         self.service.audit.record("history:purged", device_path=path, outcome="ok")
         return self._json(respond, 200, {"purged": path})
+
+    def get_update_check(self, req: ApiRequest, respond):
+        """Look for a newer release. Only ever runs because somebody asked."""
+        from usbdoctor.updates import check_for_update
+
+        result = check_for_update()
+        return self._json(respond, 200, result.to_dict())
 
     def get_settings(self, req: ApiRequest, respond):
         return self._json(respond, 200, {

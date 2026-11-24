@@ -3,7 +3,12 @@
 ; The application folder must already exist (see build.ps1).
 
 #define AppName        "USB Doctor AI"
-#define AppVersion     "1.0.0"
+; Passed by tools/build_release.py as /DAppVersion=<version>. The fallback keeps a
+; manual ISCC run working, but the build never relies on it: a hardcoded version
+; here once disagreed with the file the build expected to find.
+#ifndef AppVersion
+  #define AppVersion "0.0.0"
+#endif
 #define AppPublisher   "USB Doctor AI"
 #define AppURL         "https://github.com/Analoggeek/DriveRepair"
 #define AppExeName     "USBDoctorAI.exe"

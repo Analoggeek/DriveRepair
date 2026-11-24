@@ -120,3 +120,95 @@ class TestDesktopShell:
         window.show_page("assistant")
         qapp.processEvents()
         assert "Run a health scan" in window.assistant_page.diagnosis_view.toPlainText()
+
+
+class TestUpdateDialog:
+    """The dialog must never touch the network in a test, and never block."""
+
+    @staticmethod
+    def _fake_result(available: bool = True):
+        from usbdoctor.updates import Release, UpdateCheck
+
+        release = Release.from_json({
+            "tag_name": "v9.9.9",
+            "name": "USB Doctor AI 9.9.9",
+            "body": "## Fixed\n- a thing\n- **another** thing",
+            "html_url": "https://example.invalid/v9.9.9",
+            "published_at": "2026-12-01T10:00:00Z",
+            "assets": [{"name": "USBDoctorAI-Setup-9.9.9.exe",
+                        "browser_download_url": "https://example.invalid/setup.exe",
+                        "size": 4096}],
+        })
+        if available:
+            return UpdateCheck(status="update_available", current="1.0.0", latest="9.9.9",
+                               release=release, asset=release.assets[0],
+                               message="Version 9.9.9 is available.",
+                               platform_tag="windows-x64")
+        return UpdateCheck(status="unavailable", current="1.0.0",
+                           error="Could not reach the update server: Connection refused.",
+                           message="Could not reach the update server: Connection refused.",
+                           hint="This application works fully offline.", platform_tag="windows-x64")
+
+    @pytest.fixture()
+    def fake_worker(self, monkeypatch, qapp):
+        from PySide6.QtCore import QObject, Signal
+
+        result = self._fake_result()
+
+        class _Worker(QObject):
+            finished = Signal(object)
+            failed = Signal(str)
+
+            def __init__(self, work, parent=None):
+                super().__init__(parent)
+
+            def start(self):
+                self.finished.emit(result)
+
+            def isRunning(self):
+                return False
+
+            def wait(self, *args):
+                return True
+
+        import usbdoctor.app.updates_ui as ui
+
+        monkeypatch.setattr(ui, "UpdateWorker", _Worker)
+        return result
+
+    def test_an_available_update_is_offered(self, fake_worker, tmp_path):
+        from usbdoctor.app.updates_ui import UpdateDialog
+        from usbdoctor.service import DoctorService
+
+        service = DoctorService(state_dir=tmp_path / "state")
+        dialog = UpdateDialog(service, theme="dark")
+        assert dialog.result_check is not None
+        assert dialog.result_check.update_available
+        assert dialog.notes.toPlainText().strip(), "release notes were not rendered"
+        assert dialog.download_button.isVisibleTo(dialog), "no download button for an available update"
+        dialog.close()
+
+    def test_the_offline_result_is_a_sentence(self, fake_worker, qapp, tmp_path):
+        from usbdoctor.app.updates_ui import UpdateDialog
+        from usbdoctor.service import DoctorService
+
+        service = DoctorService(state_dir=tmp_path / "state")
+        dialog = UpdateDialog(service, theme="light")
+        dialog._worker = None  # the constructor's check is stubbed by the fixture
+        dialog._render(self._fake_result(available=False))
+        assert "Could not reach" in dialog.status.text()
+        assert dialog.download_button.isHidden()
+        dialog.close()
+
+    def test_notes_become_readable_html(self):
+        from usbdoctor.updates import format_notes_html
+
+        html = format_notes_html("## Fixed\n- a thing\n- **bold** thing")
+        assert "<h4" in html and "<li>a thing</li>" in html and "<b>bold</b>" in html
+        injected = format_notes_html("<script>alert(1)</script>")
+        assert "<script>" not in injected
+
+    def test_the_shell_shows_the_update_action(self, window):
+        assert "update" in window.update_button.text().lower()
+        assert not window.nav_buttons["dashboard"].icon().isNull(), "navigation icons are blank"
+        assert not window.theme_button.icon().isNull()

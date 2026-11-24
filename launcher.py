@@ -17,7 +17,7 @@ def main() -> int:
 
     if len(sys.argv) > 1 and sys.argv[1] in (
         "devices", "status", "scan", "plan", "repair", "image", "recover",
-        "capacity", "report", "research", "history", "serve", "selfcheck",
+        "capacity", "report", "research", "history", "serve", "selfcheck", "update",
     ):
         from usbdoctor.cli import main as cli_main
 

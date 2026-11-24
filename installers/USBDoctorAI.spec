@@ -22,6 +22,20 @@ from pathlib import Path
 ROOT = Path(SPECPATH).resolve()                 # noqa: F821 - provided by PyInstaller
 while not (ROOT / "launcher.py").exists() and ROOT.parent != ROOT:
     ROOT = ROOT.parent
+sys.path.insert(0, str(ROOT))
+from usbdoctor.version import __version__  # noqa: E402
+
+# The version resource is generated, not checked in: Explorer's Details tab showed
+# 1.0.0.0 for every build because the file carried a hardcoded version.
+VERSION_FILE = ROOT / "build" / "windows-version-info.txt"
+VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+_template = (ROOT / "installers" / "windows" / "version_info.txt").read_text(encoding="utf-8")
+_parts = [int(piece) for piece in (__version__.split(".") + ["0", "0", "0"])[:4] if piece.isdigit()]
+_parts = (_parts + [0, 0, 0, 0])[:4]
+_generated = (_template
+              .replace("(1, 0, 0, 0)", "(" + ", ".join(str(p) for p in _parts) + ")")
+              .replace("'1.0.0.0'", f"'{'.'.join(str(p) for p in _parts)}'"))
+VERSION_FILE.write_text(_generated, encoding="utf-8")
 ASSETS = ROOT / "usbdoctor" / "frontend" / "web"
 
 icon = str(ASSETS / "assets" / "app.ico")
@@ -100,7 +114,7 @@ exe = EXE(  # noqa: F821
     codesign_identity=None,
     entitlements_file=None,
     icon=icon,
-    version=str(ROOT / "installers" / "windows" / "version_info.txt"),
+    version=str(VERSION_FILE),
 )
 
 # Ship the single-folder build: this is what the installer packages.

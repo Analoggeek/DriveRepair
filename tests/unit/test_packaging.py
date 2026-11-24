@@ -471,10 +471,17 @@ class TestBuildRecursion:
         assert document["artifacts"] == []
 
     def test_no_test_starts_a_real_build(self):
+        """A test may *read* the builder; running it for real is what recurses."""
+        import re
+
+        invocation = re.compile(r"(?:sys\.executable|python[0-9.]*)[^\n]*build_release\.py")
         for path in (ROOT / "tests").rglob("test_*.py"):
             text = path.read_text(encoding="utf-8")
-            if "build_release.py" in text:
-                assert "--dry-run" in text, f"{path.name} invokes the builder without --dry-run"
+            if not invocation.search(text):
+                continue
+            assert "--dry-run" in text or "USBDOCTOR_BUILD_IN_PROGRESS" in text, (
+                f"{path.name} runs the builder without --dry-run"
+            )
 
 
 class TestPhaseAnnotations:

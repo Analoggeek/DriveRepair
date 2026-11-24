@@ -5,9 +5,10 @@ Run on the target platform after installing the packaging extras:
     pip install "usbdoctor-ai[package]"
     python tools/make_icons.py
 
-PNG sizes are produced with Qt (already a desktop dependency) so no extra
-imaging library is required; Pillow is used only to assemble the multi-resolution
-.ico container, which is the format Windows expects.
+The artwork is ``tools/icon-master.png``, drawn once at 1024 px and downscaled
+here. Falling back to Qt-drawn art if the master is missing keeps the build
+working on a machine that has only the desktop dependency. Pillow assembles the
+multi-resolution .ico container and does the downscaling; Qt renders the fallback.
 """
 
 from __future__ import annotations
@@ -29,10 +30,61 @@ ICNS_TYPES = {
 }
 
 
+MASTER = ROOT / "tools" / "icon-master.png"
+
+
+def _crop_master(image):
+    """Trim the white surround so the squircle fills the tile.
+
+    The master is generated art with a margin; an operating system draws the icon
+    inside a tile of its own, so leaving the margin makes it look shrunken next to
+    every other application in the dock.
+    """
+    from PIL import Image, ImageChops
+
+    rgb = image.convert("RGB")
+    background = Image.new("RGB", rgb.size, (255, 255, 255))
+    diff = ImageChops.difference(rgb, background)
+    box = diff.getbbox()
+    if not box:
+        return image
+    cropped = image.crop(box)
+    side = max(cropped.size)
+    # Square it up, keeping the artwork centred.
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    canvas.paste(cropped, ((side - cropped.width) // 2, (side - cropped.height) // 2))
+    return canvas
+
+
+def render_from_master() -> bool:
+    """Downscale the committed artwork. Returns False if it is not usable."""
+    if not MASTER.exists():
+        return False
+    try:
+        from PIL import Image
+    except ImportError:
+        print("Pillow missing; drawing the fallback icon with Qt")
+        return False
+    try:
+        master = _crop_master(Image.open(MASTER).convert("RGBA"))
+    except Exception as exc:  # noqa: BLE001 - any unreadable master falls back
+        print(f"master icon unusable ({exc}); drawing the fallback")
+        return False
+    ASSETS.mkdir(parents=True, exist_ok=True)
+    for size in SIZES:
+        # LANCZOS keeps the bevels and glow readable at 16 px instead of mushing
+        # them into grey.
+        resized = master.resize((size, size), Image.LANCZOS)
+        resized.save(ASSETS / f"icon-{size}.png", format="PNG", optimize=True)
+        print(f"png  {size:>5}px  (from master)")
+    master.resize((1024, 1024), Image.LANCZOS).save(ASSETS / "icon-1024.png", format="PNG")
+    return True
+
+
 def render_pngs() -> None:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import QPointF, QRectF, Qt
-    from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QPixmap
+    from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QPixmap
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])  # noqa: F841 - Qt needs the app
@@ -97,7 +149,8 @@ def build_icns() -> None:
 
 
 if __name__ == "__main__":
-    render_pngs()
+    if not render_from_master():
+        render_pngs()
     build_ico()
     if sys.platform == "darwin":
         build_icns()

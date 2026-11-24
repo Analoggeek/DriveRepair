@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "usbdoctor-ai"
-version = "1.0.0"
+dynamic = ["version"]
 description = "USB Doctor AI — intelligent storage diagnosis, repair and recovery suite"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -36,6 +36,11 @@ dev = [
   "build>=1.0",
 ]
 package = ["pyinstaller>=6.0", "Pillow>=10.0"]
+
+[tool.setuptools.dynamic]
+# The version lives in usbdoctor/version.py and nowhere else: a second copy in a
+# package manifest is the one that quietly goes stale.
+version = {attr = "usbdoctor.version.__version__"}
 
 [project.scripts]
 usbdoctor = "usbdoctor.cli:main"

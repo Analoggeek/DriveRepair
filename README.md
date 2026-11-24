@@ -173,6 +173,21 @@ Every scan follows the same order, and the UI shows which step is running:
 
 ---
 
+## Updates
+
+The desktop app has **Help → Check for Updates…** (F5) and a **Check for updates**
+button in the sidebar. It shows what is new, the size of the download for your
+machine, and one button that fetches it — then opens the file so Windows or macOS
+shows its own install prompts. Nothing installs itself.
+
+An update check is the only thing in this application that touches a network, it
+never runs on its own unless you tick *Look for updates when the application starts*
+in Settings, and a machine with no connection simply sees a sentence saying so. The
+browser interface has the same control in Settings, backed by the same code
+(`usbdoctor/updates.py`), and the CLI exposes it as `usbdoctor update --check`.
+
+---
+
 ## Command line
 
 ```bash
@@ -186,7 +201,15 @@ usbdoctor image /dev/sdb backup.img     # resumable sector image
 usbdoctor recover /dev/sdb --out ./files
 usbdoctor capacity /dev/sdb --approve   # counterfeit drive check
 usbdoctor report /dev/sdb --format html --out report.html
+usbdoctor update --check                # is there a newer release? (only network use)
+usbdoctor update --download --dir ~/Downloads
 ```
+
+`usbdoctor update` is the single command that contacts a network. It reads the
+project's published releases, compares versions properly (1.10 is newer than 1.9),
+picks the build for this machine, and — when the release publishes
+`SHA256SUMS-*.txt` — refuses a file whose digest does not match. It never installs
+anything; it hands the verified file to your operating system.
 
 Exit codes: `0` success · `1` error · `2` refused for safety · `3` cancelled by the user.
 

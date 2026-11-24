@@ -349,3 +349,17 @@ body {
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }
+
+/* ───────────── updates ───────────── */
+.update-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.update-row .btn[disabled] { opacity: .55; pointer-events: none; }
+#updateStatus.is-ok { color: var(--ok); }
+#updateStatus.is-bad { color: var(--bad); }
+#updateStatus.is-busy { color: var(--accent-2); }
+.nav-ico svg { display: block; }

@@ -284,7 +284,7 @@ def build_windows(args) -> dict:
             "Inno Setup 6 was not found. Install it (https://jrsoftware.org/isdl.php) "
             "or pass --portable-only to produce just the zip."
         )
-    run([str(iscc), str(ROOT / "installers/windows/usbdoctor.iss")])
+    run([str(iscc), f"/DAppVersion={version()}", str(ROOT / "installers/windows/usbdoctor.iss")])
     installer = DIST / f"USBDoctorAI-Setup-{version()}.exe"
     if not installer.exists():
         candidates = sorted(DIST.glob("*Setup*.exe"))
