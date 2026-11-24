@@ -961,6 +961,19 @@ async function loadSettings() {
   } catch (error) { toast(error.message, "error"); }
 }
 
+async function loadVersion() {
+  try {
+    const status = await api("/api/status");
+    const node = $("updateVersion");
+    if (node) node.textContent = `installed ${status.version}`;
+  } catch (error) { /* the About card already reports what it can */ }
+}
+
+if ($("updateCheck")) {
+  $("updateCheck").addEventListener("click", checkForUpdate);
+  loadVersion();
+}
+
 function renderTools(tools) {
   const container = $("toolsList");
   if (!container || !tools) return;
@@ -976,6 +989,36 @@ function renderAbout(status) {
     <p>USB Doctor AI performs real reads and writes on your storage hardware. Repairs are limited to
     file-system metadata that can be rebuilt from on-disk copies. It cannot repair physically damaged
     memory, and it will say so instead of pretending.</p>`;
+}
+
+/* ───────────────────────────── updates ───────────────────────────── */
+function setUpdateStatus(text, tone) {
+  const node = $("updateStatus");
+  if (!node) return;
+  node.textContent = text;
+  node.className = "small" + (tone ? ` is-${tone}` : "");
+}
+
+async function checkForUpdate() {
+  const button = $("updateCheck");
+  const download = $("updateDownload");
+  button.disabled = true;
+  setUpdateStatus("Checking for the latest release…", "busy");
+  try {
+    const data = await api("/api/update/check");
+    setUpdateStatus(data.message || "No answer from the update server.", data.update_available ? "ok" : "");
+    if (data.update_available && data.release) {
+      download.href = data.release.url;
+      download.textContent = `Download ${data.asset ? data.asset.name : "release"}`;
+      download.classList.remove("hidden");
+    } else {
+      download.classList.add("hidden");
+    }
+  } catch (error) {
+    setUpdateStatus(`Could not check: ${error.message}`, "bad");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function saveSettings() {

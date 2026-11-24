@@ -118,11 +118,56 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--open", action="store_true", help="open a browser")
     serve.add_argument("--no-token", action="store_true", help="disable the session token (local only)")
 
+    update = sub.add_parser("update", help="look for, or fetch, a newer release")
+    update.add_argument("--check", action="store_true", help="only report what is published")
+    update.add_argument("--download", action="store_true",
+                        help="fetch the build for this machine and verify its checksum")
+    update.add_argument("--dir", help="where to save it (default: your Downloads folder)")
+    update.add_argument("--json", action="store_true", dest="json")
+
     sub.add_parser(
         "selfcheck",
         help="verify this installation end-to-end (used by the installers)",
     ).add_argument("--json", action="store_true", dest="json")
     return parser
+
+
+def _update(args) -> int:
+    """Report, or fetch, a newer release. The only command that uses a network."""
+    import json as _json
+
+    from usbdoctor.updates import (UpdateError, check_for_update, default_download_dir,
+                                   download_update, version_of_tag)
+    from usbdoctor.version import __version__
+
+    result = check_for_update()
+    if args.json:
+        print(_json.dumps(result.to_dict(), indent=2))
+    else:
+        print(f"installed : {result.current}")
+        if result.latest:
+            print(f"published : {result.latest}")
+        print(f"platform  : {result.platform_tag}")
+        print(f"status    : {result.message}")
+        if result.hint:
+            print(f"note      : {result.hint}")
+    if not args.download or not result.update_available or result.asset is None:
+        # Everything except "there is something to fetch" is an answer, not a failure.
+        return 0 if result.status != "unavailable" else 1
+
+    target = Path(args.dir) if args.dir else default_download_dir()
+    try:
+        path = download_update(result, target)
+    except UpdateError as exc:
+        print(f"download failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"saved     : {path}")
+    from usbdoctor.updates import checksum_name
+
+    if result.release and result.release.asset(checksum_name(result.platform_tag)):
+        print("verified  : sha256 matches the published checksum")
+    print("next      : open the file to install it" if not args.json else "")
+    return 0
 
 
 def _selfcheck(*, json_out: bool = False) -> int:
@@ -406,6 +451,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         # selfcheck must not construct the service: doing so would create the
         # user's state directory (and a history database) merely to prove the
         # installation works. It uses its own scratch directory instead.
+        if command == "update":
+            return _update(args)
+
         if command == "selfcheck":
             return _selfcheck(json_out=getattr(args, "json", False))
 

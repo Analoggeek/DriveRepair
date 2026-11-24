@@ -40,6 +40,9 @@ step "Running the test suite"
 step "Generating icons"
 QT_QPA_PLATFORM=offscreen "$PY_BIN" tools/make_icons.py
 
+VERSION="$(python3 -c 'from usbdoctor.version import __version__; print(__version__)')"
+DMG="dist/USBDoctorAI-${VERSION}.dmg"
+
 step "Building the .app bundle"
 rm -rf build dist
 "$PY_BIN" -m PyInstaller installers/macos/USBDoctorAI.spec --noconfirm --clean
@@ -85,7 +88,7 @@ if [[ $DO_SIGN -eq 1 ]]; then
 fi
 
 step "Building the DMG"
-rm -f dist/USBDoctorAI-1.0.0.dmg
+rm -f $DMG
 if command -v create-dmg >/dev/null; then
   create-dmg \
     --volname "USB Doctor AI" \
@@ -94,18 +97,18 @@ if command -v create-dmg >/dev/null; then
     --icon-size 96 --icon "USBDoctorAI.app" 160 180 \
     --app-drop-link 470 180 \
     --hide-extension "USBDoctorAI.app" \
-    "dist/USBDoctorAI-1.0.0.dmg" "dist/USBDoctorAI.app" || \
+    "$DMG" "dist/USBDoctorAI.app" || \
   hdiutil create -volname "USB Doctor AI" -srcfolder dist/USBDoctorAI.app \
-    -ov -format UDZO "dist/USBDoctorAI-1.0.0.dmg"
+    -ov -format UDZO "$DMG"
 else
   echo "create-dmg not installed (brew install create-dmg); using hdiutil."
   hdiutil create -volname "USB Doctor AI" -srcfolder dist/USBDoctorAI.app \
-    -ov -format UDZO "dist/USBDoctorAI-1.0.0.dmg"
+    -ov -format UDZO "$DMG"
 fi
 if [[ $DO_SIGN -eq 1 && -n "${SIGN_IDENTITY:-}" ]]; then
-  codesign --force --timestamp --sign "$SIGN_IDENTITY" "dist/USBDoctorAI-1.0.0.dmg" \
+  codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG" \
     || fail "Signing the DMG failed."
-  codesign --verify --verbose=2 "dist/USBDoctorAI-1.0.0.dmg" || fail "The DMG signature did not verify."
+  codesign --verify --verbose=2 "$DMG" || fail "The DMG signature did not verify."
 else
   echo "DMG left unsigned (pass --sign with SIGN_IDENTITY to sign it)."
 fi
@@ -113,16 +116,16 @@ fi
 if [[ $DO_SIGN -eq 1 ]]; then
   step "Notarizing"
   if [[ -n "${NOTARY_PROFILE:-}" ]]; then
-    xcrun notarytool submit "dist/USBDoctorAI-1.0.0.dmg" --keychain-profile "$NOTARY_PROFILE" --wait
-    xcrun stapler staple "dist/USBDoctorAI-1.0.0.dmg"
-    spctl --assess --type open --context context:primary-signature --verbose=2 "dist/USBDoctorAI-1.0.0.dmg" || true
+    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$DMG"
+    spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG" || true
   else
     echo "Set NOTARY_PROFILE to a 'xcrun notarytool store-credentials' profile to notarize."
   fi
 fi
 
 step "Done"
-ls -lh dist/USBDoctorAI-1.0.0.dmg
+ls -lh $DMG
 echo "App  : dist/USBDoctorAI.app"
 echo "CLI  : dist/USBDoctorAI.app/Contents/MacOS/USBDoctorAI status"
 echo "Self : dist/USBDoctorAI.app/Contents/MacOS/USBDoctorAI selfcheck"

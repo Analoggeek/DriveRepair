@@ -13,6 +13,7 @@ reports it with `lipo -archs`; the CI matrix builds each architecture on its own
 runner and ships two DMGs rather than pretending one binary covers both.
 """
 
+import sys
 from pathlib import Path
 
 # SPECPATH is provided by PyInstaller and points at this spec's directory. Do not
@@ -21,6 +22,9 @@ from pathlib import Path
 ROOT = Path(SPECPATH).resolve()   # noqa: F821 - provided by PyInstaller
 while not (ROOT / "launcher.py").exists() and ROOT.parent != ROOT:
     ROOT = ROOT.parent
+
+sys.path.insert(0, str(ROOT))
+from usbdoctor.version import __version__  # noqa: E402  (needs ROOT on the path)
 ASSETS = ROOT / "usbdoctor" / "frontend" / "web"
 
 icon = str(ASSETS / "assets" / "app.icns")
@@ -111,12 +115,12 @@ app = BUNDLE(  # noqa: F821
     name="USBDoctorAI.app",
     icon=icon,
     bundle_identifier="ai.usbdoctor.app",
-    version="1.0.0",
+    version=__version__,
     info_plist={
         "CFBundleName": "USB Doctor AI",
         "CFBundleDisplayName": "USB Doctor AI",
-        "CFBundleShortVersionString": "1.0.0",
-        "CFBundleVersion": "1.0.0",
+        "CFBundleShortVersionString": __version__,
+        "CFBundleVersion": __version__,
         "NSHighResolutionCapable": True,
         "NSRequiresAquaSystemAppearance": False,
         "LSMinimumSystemVersion": "11.0",

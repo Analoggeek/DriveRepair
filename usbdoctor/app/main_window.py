@@ -6,10 +6,9 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -20,24 +19,26 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from usbdoctor.app.theme import stylesheet
+from usbdoctor.app import icons
+from usbdoctor.app.theme import palette_for, stylesheet
 from usbdoctor.app.widgets.common import Toast
 from usbdoctor.service.engine import DoctorService
+from usbdoctor.updates import UpdateCheck, check_for_update
 from usbdoctor.version import APP_NAME, APP_TAGLINE, __version__
 
 LOG = logging.getLogger(__name__)
 
 PAGES = (
-    ("dashboard", "◉", "Dashboard"),
-    ("devices", "▤", "Devices"),
-    ("scan", "◎", "Health Scan"),
-    ("repair", "✚", "Repair Center"),
-    ("recovery", "⟲", "Data Recovery"),
-    ("performance", "⚡", "Performance"),
-    ("assistant", "✦", "AI Assistant"),
-    ("history", "☰", "History"),
-    ("reports", "▦", "Reports"),
-    ("settings", "⚙", "Settings"),
+    ("dashboard", "dashboard", "Dashboard"),
+    ("devices", "devices", "Devices"),
+    ("scan", "scan", "Health Scan"),
+    ("repair", "repair", "Repair Center"),
+    ("recovery", "recovery", "Data Recovery"),
+    ("performance", "performance", "Performance"),
+    ("assistant", "assistant", "AI Assistant"),
+    ("history", "history", "History"),
+    ("reports", "reports", "Reports"),
+    ("settings", "settings", "Settings"),
 )
 
 
@@ -74,6 +75,9 @@ class MainWindow(QMainWindow):
         self.service = service
         self.theme = theme
         self.setWindowTitle(f"{APP_NAME} — {APP_TAGLINE}")
+        tile = icons.app_icon()
+        if not tile.isNull():
+            self.setWindowIcon(tile)
         self.resize(1280, 820)
         self.setMinimumSize(1040, 680)
 
@@ -81,12 +85,19 @@ class MainWindow(QMainWindow):
         self.nav_buttons: dict[str, QPushButton] = {}
         self.current_page = "dashboard"
 
+        self.latest_check: Optional[UpdateCheck] = None
+        self.update_available = False
+        self._update_worker = None
+
         self._build_ui()
         self.bridge = EventBridge(service, self)
         self.bridge.event.connect(self.on_engine_event)
         self.apply_theme(theme)
         self.refresh_status()
         QTimer.singleShot(120, self.devices_page.refresh)
+        if self.service.history.get_setting("check_updates_on_start", False):
+            # Opt-in: nothing here touches the network unless the user said so.
+            QTimer.singleShot(2500, lambda: self.check_updates(quiet=True))
 
     # ------------------------------------------------------------------ ui
     def _build_ui(self) -> None:
@@ -118,11 +129,14 @@ class MainWindow(QMainWindow):
         box.setSpacing(4)
 
         brand = QHBoxLayout()
-        brand.setSpacing(10)
-        mark = QLabel("◎")
+        brand.setSpacing(11)
+        mark = QLabel()
         mark.setObjectName("BrandMark")
-        mark.setFixedSize(36, 36)
+        mark.setFixedSize(34, 34)
         mark.setAlignment(Qt.AlignCenter)
+        tile = icons.app_icon().pixmap(QSize(34, 34))
+        if not tile.isNull():
+            mark.setPixmap(tile)
         brand.addWidget(mark)
         names = QVBoxLayout()
         names.setSpacing(0)
@@ -138,12 +152,13 @@ class MainWindow(QMainWindow):
         box.addLayout(brand)
         box.addSpacing(18)
 
-        for key, icon, caption in PAGES:
-            button = QPushButton(f"  {icon}   {caption}")
+        for index, (key, _icon_name, caption) in enumerate(PAGES, start=1):
+            button = QPushButton(caption)
             button.setObjectName("NavButton")
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
-            button.setToolTip(f"{caption}  (Ctrl+{PAGES.index((key, icon, caption)) + 1})")
+            button.setIconSize(QSize(18, 18))
+            button.setToolTip(f"{caption}  (Ctrl+{index})")
             button.clicked.connect(lambda _=False, k=key: self.show_page(k))
             self.nav_buttons[key] = button
             box.addWidget(button)
@@ -154,11 +169,22 @@ class MainWindow(QMainWindow):
         self.rights_label.setWordWrap(True)
         box.addWidget(self.rights_label)
 
-        self.theme_button = QPushButton("◐  Switch to light")
+        self.update_button = QPushButton("Check for updates")
+        self.update_button.setObjectName("Ghost")
+        self.update_button.setCursor(Qt.PointingHandCursor)
+        self.update_button.setIconSize(QSize(15, 15))
+        self.update_button.setToolTip("Look for a newer release — the only feature that uses a network")
+        self.update_button.clicked.connect(self.open_update_dialog)
+        box.addWidget(self.update_button)
+
+        self.theme_button = QPushButton("Switch to light")
         self.theme_button.setObjectName("Ghost")
         self.theme_button.setCursor(Qt.PointingHandCursor)
+        self.theme_button.setIconSize(QSize(15, 15))
         self.theme_button.clicked.connect(self.toggle_theme)
         box.addWidget(self.theme_button)
+        # Only now do all the buttons exist; painting icons earlier crashed here.
+        self._paint_nav_icons()
         return sidebar
 
     def _build_main(self) -> QWidget:
@@ -270,6 +296,11 @@ class MainWindow(QMainWindow):
         view.addAction(toggle)
 
         help_menu = self.menuBar().addMenu("Help")
+        updates = QAction("Check for Updates…", self)
+        updates.setShortcut("F5")
+        updates.triggered.connect(self.open_update_dialog)
+        help_menu.addAction(updates)
+        help_menu.addSeparator()
         about = QAction(f"About {APP_NAME}", self)
         about.triggered.connect(lambda: self.show_page("settings"))
         help_menu.addAction(about)
@@ -279,8 +310,27 @@ class MainWindow(QMainWindow):
         self.theme = theme
         self.setStyleSheet(stylesheet(theme))
         light = theme == "light"
-        self.theme_button.setText("☀  Switch to dark" if light else "◐  Switch to light")
+        self.theme_button.setText("Switch to dark" if light else "Switch to light")
+        self._paint_nav_icons()
         self.service.set_setting("theme", theme)
+
+    def _paint_nav_icons(self) -> None:
+        """Icons follow the theme, and a checked row gets the lit variant."""
+        palette = palette_for(self.theme)
+        idle = icons.Style(colour=palette.text_mid)
+        active = icons.Style(colour=palette.accent_hover, accent=palette.accent)
+        for key, icon_name, _caption in PAGES:
+            button = self.nav_buttons.get(key)  # icon_name still names the glyph
+            if button is not None:
+                button.setIcon(icons.icon(icon_name, 18, active if button.isChecked() else idle))
+        if not hasattr(self, "theme_button"):
+            return  # the sidebar is still being assembled
+        self.theme_button.setIcon(icons.icon("theme", 15, idle))
+        lit = icons.Style(colour=palette.accent_hover, accent=palette.accent)
+        self.update_button.setIcon(icons.icon("update", 15, lit if self.update_available else idle))
+
+    def _tint_navigation(self) -> None:
+        self._paint_nav_icons()  # kept for callers that only want a retint
 
     def toggle_theme(self) -> None:
         self.apply_theme("light" if self.theme == "dark" else "dark")
@@ -296,6 +346,7 @@ class MainWindow(QMainWindow):
             button.setChecked(name == key)
         self.page_title.setText(dict((k, c) for k, _i, c in PAGES)[key])
         self.page_sub.setText(getattr(page, "SUBTITLE", ""))
+        self._paint_nav_icons()
         if hasattr(page, "on_shown"):
             page.on_shown()
 
@@ -357,6 +408,60 @@ class MainWindow(QMainWindow):
         self.status_right.setText(f"{status['platform']} · {status['stats']['scans']} scans recorded")
         self.devices_page.refresh()
         self.dashboard_page.reload()
+
+    # --------------------------------------------------------------- updates
+    def check_updates(self, quiet: bool = False) -> None:
+        """Look for a new release without blocking the window.
+
+        ``quiet`` keeps the startup check silent unless something is actually
+        available — a background check should never open a dialog on its own.
+        """
+        if getattr(self, "update_available", False):
+            return
+        from usbdoctor.app.updates_ui import UpdateWorker
+
+        if not quiet:
+            self.status_right.setText("Checking for updates…")
+            self.update_button.setEnabled(False)
+        worker = UpdateWorker(check_for_update, self)
+        worker.finished.connect(lambda result: self._on_update_checked(result, quiet))
+        worker.failed.connect(lambda message: self._on_update_failed(message, quiet))
+        worker.start()
+        self._update_worker = worker
+
+    def _on_update_checked(self, result: UpdateCheck, quiet: bool) -> None:
+        self.latest_check = result
+        self.update_button.setEnabled(True)
+        self.update_available = result.update_available
+        self._paint_nav_icons()
+        if result.update_available:
+            self.update_button.setText(f"Update to {result.latest}")
+            self.status_right.setText(f"Version {result.latest} is available")
+            if not quiet:
+                self.toast.show_message(result.message)
+            elif self.service.history.get_setting("notify_updates", True):
+                self.toast.show_message(f"Version {result.latest} is available — see Settings")
+        else:
+            self.update_button.setText("Check for updates")
+            self.status_right.setText(
+                result.message if result.status == "up_to_date" else "Update check unavailable"
+            )
+            if not quiet:
+                self.toast.show_message(result.message)
+
+    def _on_update_failed(self, message: str, quiet: bool) -> None:
+        self.update_button.setEnabled(True)
+        self.status_right.setText("Update check unavailable")
+        if not quiet:
+            self.toast.show_message(message)
+
+    def open_update_dialog(self) -> None:
+        from usbdoctor.app.updates_ui import UpdateDialog
+
+        dialog = UpdateDialog(self.service, parent=self, theme=self.theme)
+        if self.latest_check is not None:
+            dialog.show_result(self.latest_check)
+        dialog.exec()
 
     def notify(self, message: str, tone: str = "info") -> None:
         self.toast.show_message(message)
