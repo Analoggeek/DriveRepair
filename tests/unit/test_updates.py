@@ -290,3 +290,33 @@ class TestDownloadLocation:
         monkeypatch.setattr(updates.Path, "home", classmethod(lambda cls: tmp_path / "home"))
         assert updates.default_download_dir().exists() or True
         assert "Downloads" not in str(updates.default_download_dir())
+
+
+class TestWindowsFileHandles:
+    """Windows refuses to rename a file that still has an open handle.
+
+    tempfile.mkstemp returns a descriptor *and* a name; leaving the descriptor open
+    made every download fail there with WinError 32 while Linux and macOS were
+    perfectly happy.
+    """
+
+    def test_no_descriptor_is_left_open(self, tmp_path, monkeypatch):
+        import os as os_module
+
+        closed: list[int] = []
+        real_close = os_module.close
+
+        def tracking_close(fd):
+            closed.append(fd)
+            return real_close(fd)
+
+        monkeypatch.setattr(updates.os, "close", tracking_close)
+        asset = Asset("a.bin", "https://example.invalid/a.bin", 3)
+        download(asset, tmp_path, opener=lambda url, timeout: b"abc")
+        assert closed, "the temporary file's descriptor was never closed"
+
+    def test_the_finished_file_is_where_it_was_asked_to_go(self, tmp_path):
+        asset = Asset("a.bin", "https://example.invalid/a.bin", 3)
+        saved = download(asset, tmp_path, opener=lambda url, timeout: b"abc")
+        assert saved == tmp_path / "a.bin"
+        assert list(tmp_path.iterdir()) == [saved], "a temporary file was left behind"

@@ -381,7 +381,13 @@ def download(asset: Asset, target_dir: Path, *, progress: Optional[Callable[[int
             f"{asset.name} arrived truncated ({len(body)} of {asset.size} bytes).",
             kind="bad_download", hint="Try again; the connection dropped.",
         )
-    temporary = Path(tempfile.mkstemp(prefix=".usbdoctor-", dir=str(target_dir))[1])
+    # mkstemp opens the file and hands back both a descriptor and a name. The
+    # descriptor must be closed before we write to it again: on Windows an open
+    # handle makes os.replace and unlink fail with WinError 32, so the download
+    # lands but can never be renamed into place.
+    descriptor, name = tempfile.mkstemp(prefix=".usbdoctor-", dir=str(target_dir))
+    os.close(descriptor)
+    temporary = Path(name)
     try:
         temporary.write_bytes(body)
         if expected_sha256:
@@ -396,8 +402,10 @@ def download(asset: Asset, target_dir: Path, *, progress: Optional[Callable[[int
         os.replace(temporary, final)
         return final
     finally:
-        if temporary.exists():
+        try:
             temporary.unlink(missing_ok=True)
+        except OSError:  # pragma: no cover - a scanner holding the file on Windows
+            pass
 
 
 def checksums_for(release: Release, tag: str, *, timeout: float = DEFAULT_TIMEOUT,
