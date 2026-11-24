@@ -544,3 +544,71 @@ class TestInstallerScript:
     def test_the_build_does_not_depend_on_a_quick_launch_shortcut(self):
         """It is a Windows 95-era target and it forced an admin-mode warning."""
         assert "quicklaunch" not in self.SCRIPT.lower()
+
+
+class TestWorkflowDeadlines:
+    """A step that can hang is a step that will hang, at the worst time.
+
+    One stuck packaging test held a job open for ninety minutes and produced a
+    423-byte log. Both workflows now run the suite with a per-test deadline, a
+    whole-step deadline, and no pipe between pytest and its log.
+    """
+
+    WORKFLOWS = [ROOT / ".github/workflows/ci.yml", ROOT / ".github/workflows/release.yml"]
+    SUITE_STEPS = {"Desktop UI tests", "Run the test suite"}
+
+    def _suite_steps(self):
+        yaml = pytest.importorskip("yaml", reason="PyYAML is a dev dependency; CI installs it")
+
+        for path in self.WORKFLOWS:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            for job_name, job in data["jobs"].items():
+                for step in job.get("steps", []):
+                    if step.get("name") in self.SUITE_STEPS:
+                        yield path.name, job_name, step
+
+    def test_every_suite_step_has_a_deadline(self):
+        found = 0
+        for name, job, step in self._suite_steps():
+            found += 1
+            budget = step.get("timeout-minutes")
+            assert budget, f"{name}:{job} runs the suite with no timeout-minutes"
+            # Windows needs ~25 minutes; anything under that cannot finish there.
+            assert budget >= 30, f"{name}:{job} gives the suite only {budget} minutes"
+        assert found, "no suite step found - the workflows changed shape"
+
+    def test_pytest_itself_has_a_per_test_deadline(self):
+        for name, job, step in self._suite_steps():
+            script = step["run"]
+            assert "--timeout" in script, f"{name}:{job} has no per-test deadline"
+
+    def test_the_suite_log_is_not_behind_a_pipe(self):
+        for name, job, step in self._suite_steps():
+            script = step["run"]
+            assert "| tee" not in script, (
+                f"{name}:{job} pipes the suite through tee; a child holding stdout "
+                "keeps that pipe open after pytest exits and the log never lands"
+            )
+            assert "> pytest" in script or "> build" in script, (
+                f"{name}:{job} does not redirect the run to a log file"
+            )
+
+    def test_jobs_cannot_run_forever(self):
+        yaml = pytest.importorskip("yaml", reason="PyYAML is a dev dependency; CI installs it")
+
+        for path in self.WORKFLOWS:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            for job_name, job in data["jobs"].items():
+                assert job.get("timeout-minutes"), f"{path.name}:{job_name} has no job timeout"
+
+    def test_yaml_is_a_declared_dev_dependency(self):
+        """Otherwise the workflow tests skip, and an unparseable workflow ships.
+
+        A duplicated ``timeout-minutes`` key once made ``release.yml``
+        undispatched (HTTP 422) with no failing check to say so, because these
+        tests used ``importorskip`` and PyYAML was in no dependency list.
+        """
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        dev = re.search(r"^dev = \[(.*?)\]", text, re.S | re.M)
+        assert dev, "no dev extras in pyproject.toml"
+        assert "PyYAML" in dev.group(1), "PyYAML must be a dev dependency"

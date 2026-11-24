@@ -25,7 +25,16 @@ dependencies = []
 [project.optional-dependencies]
 # The engine, the web interface and the CLI run on the standard library alone.
 desktop = ["PySide6-Essentials>=6.5"]
-dev = ["pytest>=7.4", "pytest-timeout>=2.1", "ruff>=0.1", "mypy>=1.6", "build>=1.0"]
+dev = [
+  "pytest>=7.4",
+  "pytest-timeout>=2.1",
+  # The workflow tests parse .github/workflows; absent, they skip - and an
+  # unparseable workflow then only shows up when a release is dispatched.
+  "PyYAML>=6.0",
+  "ruff>=0.1",
+  "mypy>=1.6",
+  "build>=1.0",
+]
 package = ["pyinstaller>=6.0", "Pillow>=10.0"]
 
 [project.scripts]
