@@ -558,7 +558,7 @@ class TestWorkflowDeadlines:
     SUITE_STEPS = {"Desktop UI tests", "Run the test suite"}
 
     def _suite_steps(self):
-        import yaml
+        yaml = pytest.importorskip("yaml", reason="PyYAML is a dev dependency; CI installs it")
 
         for path in self.WORKFLOWS:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -594,9 +594,21 @@ class TestWorkflowDeadlines:
             )
 
     def test_jobs_cannot_run_forever(self):
-        import yaml
+        yaml = pytest.importorskip("yaml", reason="PyYAML is a dev dependency; CI installs it")
 
         for path in self.WORKFLOWS:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
             for job_name, job in data["jobs"].items():
                 assert job.get("timeout-minutes"), f"{path.name}:{job_name} has no job timeout"
+
+    def test_yaml_is_a_declared_dev_dependency(self):
+        """Otherwise the workflow tests skip, and an unparseable workflow ships.
+
+        A duplicated ``timeout-minutes`` key once made ``release.yml``
+        undispatched (HTTP 422) with no failing check to say so, because these
+        tests used ``importorskip`` and PyYAML was in no dependency list.
+        """
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        dev = re.search(r"^dev = \[(.*?)\]", text, re.S | re.M)
+        assert dev, "no dev extras in pyproject.toml"
+        assert "PyYAML" in dev.group(1), "PyYAML must be a dev dependency"
